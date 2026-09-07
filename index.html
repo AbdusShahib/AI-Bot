@@ -24,25 +24,6 @@
             height: 100vh;
         }
 
-        .config-bar {
-            background-color: var(--chat-bg);
-            border-bottom: 1px solid var(--border-color);
-            padding: 12px 20px;
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .config-bar input {
-            background: #2a2b2d;
-            border: 1px solid var(--border-color);
-            color: white;
-            padding: 8px 12px;
-            border-radius: 6px;
-            min-width: 300px;
-        }
-
         .chat-container {
             flex: 1;
             overflow-y: auto;
@@ -130,14 +111,8 @@
 </head>
 <body>
 
-    <div class="config-bar">
-        <label for="apiKey">Gemini API Key:</label>
-        <input type="password" id="apiKey" placeholder="Paste your AIzaSy... key here" />
-        <span style="font-size: 0.85rem; color:#80868b;">Keys are saved locally in your browser memory.</span>
-    </div>
-
     <div class="chat-container" id="chatWindow">
-        <div class="message system-message">Enter your API key at the top to start chatting with Gemini.</div>
+        <div class="message system-message">Chat is ready. Type a message below!</div>
     </div>
 
     <div class="input-bar">
@@ -148,29 +123,13 @@
     <script type="module">
         import { GoogleGenAI } from "https://esm.sh/@google/genai";
 
-        console.log("App Loaded Successfully!"); // Helps for debugging
-
-        const apiKeyInput = document.getElementById('apiKey');
         const chatWindow = document.getElementById('chatWindow');
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
 
+        // Your API Key is now hardcoded here
+        const MY_API_KEY = "AQ.Ab8RN6L5rIKmv7YspNu0nu85C5WF3VCC5AJtAbpFPv471woh4w";
         let chatSession = null;
-        let currentApiKey = '';
-
-        if (localStorage.getItem('gemini_saved_key')) {
-            apiKeyInput.value = localStorage.getItem('gemini_saved_key');
-            currentApiKey = apiKeyInput.value.trim();
-        }
-
-        apiKeyInput.addEventListener('input', () => {
-            const newKey = apiKeyInput.value.trim();
-            localStorage.setItem('gemini_saved_key', newKey);
-            if (newKey !== currentApiKey) {
-                currentApiKey = newKey;
-                chatSession = null; 
-            }
-        });
 
         function appendMessage(text, sender) {
             const msgDiv = document.createElement('div');
@@ -182,13 +141,7 @@
         }
 
         async function handleSendMessage() {
-            const key = apiKeyInput.value.trim();
             const text = userInput.value.trim();
-
-            if (!key) {
-                alert("Please enter your Google Gemini API Key first!");
-                return;
-            }
             if (!text) return;
 
             appendMessage(text, 'user');
@@ -199,9 +152,9 @@
 
             try {
                 if (!chatSession) {
-                    const ai = new GoogleGenAI({ apiKey: key });
+                    const ai = new GoogleGenAI({ apiKey: MY_API_KEY });
                     chatSession = ai.chats.create({
-                        model: 'gemini-3.5-flash-lite', // Updated model based on your API error
+                        model: 'gemini-3.6-flash',
                     });
                 }
 
