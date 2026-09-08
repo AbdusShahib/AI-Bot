@@ -13,6 +13,11 @@ let currentCommand = {
     action: "stop"
 };
 
+// 0. Default Home Route (Prevents "Cannot GET /" error)
+app.get('/', (req, res) => {
+    res.send('🤖 Robot Server is online and running successfully!');
+});
+
 // 1. Endpoint for ESP32-CAM (Uploads image, gets commands)
 app.post('/upload', (req, res) => {
     if (req.body && req.body.length > 0) {
