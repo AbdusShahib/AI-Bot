@@ -11,7 +11,7 @@ app.use(express.json({ limit: '10mb' }));
 // Raw binary parser used ONLY on the JPEG upload endpoint.
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
 
-// Global Bot State containing all  servos, motors, toggles, and sequence commands
+// Global Bot State containing all servos, motors, toggles, and sequence commands
 let botState = {
     pan: 90,
     tilt: 90,
@@ -49,6 +49,56 @@ app.get('/image', (req, res) => {
         'Content-Length': latestFrame.length
     });
     res.end(latestFrame);
+});
+
+// 2b. Full-bleed auto-refreshing video page — used by Screen1's WebViewer2
+// as a plain background feed (no joysticks/controls, just the picture).
+// This is what https://ai-bot-m5b2.onrender.com/stream serves.
+app.get('/stream', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * { box-sizing: border-box; }
+                body, html {
+                    margin: 0; padding: 0; width: 100vw; height: 100vh;
+                    background: #000; overflow: hidden;
+                }
+                #video-area {
+                    width: 100%; height: 100%;
+                    display: flex; justify-content: center; align-items: center;
+                }
+                img {
+                    width: 100%; height: 100%; object-fit: cover;
+                    transform: rotate(180deg); display: none;
+                }
+                #errorBox {
+                    color: #ff4444; border: 2px solid #ff4444; padding: 20px;
+                    border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
+                    font-family: sans-serif;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="video-area">
+                <div id="errorBox">Connecting to Armbot...</div>
+                <img id="feed" alt="Live Stream" />
+            </div>
+            <script>
+                const img = document.getElementById('feed');
+                const errBox = document.getElementById('errorBox');
+                setInterval(() => {
+                    const tempImg = new Image();
+                    tempImg.onload = () => { img.src = tempImg.src; img.style.display = 'block'; errBox.style.display = 'none'; };
+                    tempImg.onerror = () => { img.style.display = 'none'; errBox.style.display = 'block'; errBox.innerHTML = "<b>Connection Lost</b>"; };
+                    tempImg.src = '/image?' + new Date().getTime();
+                }, 200);
+            </script>
+        </body>
+        </html>
+    `);
 });
 
 // 3. Command Update Endpoint (Receives JSON payloads from App Inventor or HTML UI)
