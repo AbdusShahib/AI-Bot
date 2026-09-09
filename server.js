@@ -133,17 +133,17 @@ app.get('/controller', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <!-- Forces mobile scaling, prevents browser pinch-zoom and pull-to-refresh -->
+            <!-- Forces mobile scaling, locks zoom and touch gestures -->
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
                 body, html {
-                    margin: 0; padding: 0; width: 100%; height: 100%;
+                    margin: 0; padding: 0; width: 100vw; height: 100vh;
                     background: #000; color: white; font-family: sans-serif;
                     overflow: hidden; touch-action: none; position: relative;
                 }
                 
-                /* 1. Full-Screen Video Background */
+                /* Fullscreen Landscape Video Feed */
                 #video-area {
                     position: absolute; top: 0; left: 0;
                     width: 100%; height: 100%; z-index: 1;
@@ -151,59 +151,69 @@ app.get('/controller', (req, res) => {
                 }
                 img { 
                     width: 100%; height: 100%; 
-                    object-fit: cover; /* Fills screen completely while preserving aspect ratio */
+                    object-fit: cover; /* Spans full screen landscape like a mobile game */
                     transform: rotate(180deg); display: none; 
                 }
                 #errorBox { 
                     color: #ff4444; border: 2px solid #ff4444; padding: 20px; 
-                    border-radius: 8px; background: rgba(0,0,0,0.8); text-align: center;
+                    border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
                 }
 
-                /* 2. Floating Overlay Controls (70% Transparent / 30% Opacity) */
+                /* PUBG-Style Floating Overlay Joysticks */
                 .joystick-container {
-                    position: absolute; bottom: 30px;
-                    width: 130px; height: 130px; border-radius: 50%;
+                    position: absolute; bottom: 25px;
+                    width: 140px; height: 140px; border-radius: 50%;
                     background: rgba(42, 42, 44, 0.3); 
                     border: 3px solid rgba(255, 255, 255, 0.3);
                     z-index: 10; display: flex; justify-content: center; align-items: center;
-                    transition: opacity 0.2s ease;
+                    transition: opacity 0.2s ease, background 0.2s ease;
                 }
                 
-                #joy-left { left: 25px; }   /* Floating Left: Servos */
-                #joy-right { right: 25px; } /* Floating Right: Motors */
+                #joy-left { left: 40px; }   /* Left Thumb: Servos (Pan/Tilt) */
+                #joy-right { right: 40px; } /* Right Thumb: Motors (Drive) */
 
-                /* Thumbstick Knob */
+                /* Joystick Thumb Knob */
                 .stick {
-                    width: 55px; height: 55px; border-radius: 50%;
-                    background: rgba(138, 180, 248, 0.5);
+                    width: 60px; height: 60px; border-radius: 50%;
+                    background: rgba(138, 180, 248, 0.4);
                     border: 2px solid rgba(255, 255, 255, 0.6);
                     position: absolute; pointer-events: none;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
                 }
 
-                /* Active state: Brightens when touched */
+                /* Active State: Highlights when pressed */
                 .joystick-container.active {
-                    background: rgba(42, 42, 44, 0.7);
-                    border-color: rgba(255, 255, 255, 0.8);
+                    background: rgba(42, 42, 44, 0.75);
+                    border-color: rgba(255, 255, 255, 0.9);
                 }
                 .joystick-container.active .stick {
-                    background: rgba(138, 180, 248, 0.9);
+                    background: rgba(138, 180, 248, 0.85);
+                }
+
+                /* Corner HUD Label */
+                .hud-label {
+                    position: absolute; top: 15px; left: 20px; z-index: 10;
+                    font-size: 12px; font-weight: bold; letter-spacing: 1px;
+                    color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4);
+                    padding: 5px 10px; border-radius: 4px; pointer-events: none;
                 }
             </style>
         </head>
         <body>
-            <!-- Background Stream -->
+            <div class="hud-label">AI ARMBOT HUD</div>
+
+            <!-- Video Stream Background -->
             <div id="video-area">
                 <div id="errorBox">Connecting to Armbot...</div>
                 <img id="feed" alt="Live Stream" />
             </div>
             
-            <!-- Hovering Overlay Joysticks -->
+            <!-- Left Thumb (Servos) & Right Thumb (Motors) -->
             <div id="joy-left" class="joystick-container"><div id="stick-left" class="stick"></div></div>
             <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
 
             <script>
-                // --- 1. Video Feed Loop ---
+                // --- 1. Video Stream Refresher ---
                 const img = document.getElementById('feed');
                 const errBox = document.getElementById('errorBox');
                 setInterval(() => {
@@ -213,13 +223,12 @@ app.get('/controller', (req, res) => {
                     tempImg.src = '/image?' + new Date().getTime();
                 }, 200);
 
-                // --- 2. State & HTTP Transmission ---
+                // --- 2. Telemetry Transmission ---
                 let botState = { pan: 90, tilt: 90, action: "stop" };
                 let lastSent = 0;
 
                 function sendCommand() {
-                    // Throttles to 10 HTTP updates/sec max to keep latency low
-                    if (Date.now() - lastSent < 100) return;
+                    if (Date.now() - lastSent < 100) return; // Cap at 10 requests/sec
                     lastSent = Date.now();
 
                     fetch('/update-command', {
@@ -229,13 +238,13 @@ app.get('/controller', (req, res) => {
                     }).catch(err => console.error("Update failed:", err));
                 }
 
-                // --- 3. Multi-Touch Joystick Engine ---
+                // --- 3. Multi-Touch Control Engine ---
                 class OverlayJoystick {
                     constructor(baseId, stickId, isServo) {
                         this.base = document.getElementById(baseId);
                         this.stick = document.getElementById(stickId);
                         this.isServo = isServo;
-                        this.maxRadius = 50; 
+                        this.maxRadius = 55; 
                         this.active = false;
                         this.centerX = 0; this.centerY = 0;
 
@@ -298,7 +307,7 @@ app.get('/controller', (req, res) => {
 
                         if (this.isServo) {
                             botState.pan = Math.round(90 + (nx * 90));
-                            botState.tilt = Math.round(90 + (ny * -90)); // Upper drag tilts camera up
+                            botState.tilt = Math.round(90 + (ny * -90));
                         } else {
                             if (ny < -0.35) botState.action = "forward";
                             else if (ny > 0.35) botState.action = "reverse";
@@ -308,7 +317,6 @@ app.get('/controller', (req, res) => {
                     }
                 }
 
-                // Initialize left and right overlay joysticks
                 new OverlayJoystick('joy-left', 'stick-left', true);
                 new OverlayJoystick('joy-right', 'stick-right', false);
             </script>
@@ -316,7 +324,6 @@ app.get('/controller', (req, res) => {
         </html>
     `);
 });
-
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
