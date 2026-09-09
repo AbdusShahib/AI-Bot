@@ -114,7 +114,7 @@ app.get('/stream', (req, res) => {
                         tempImg.onerror = () => {
                             img.style.display = 'none';
                             errBox.style.display = 'block';
-                            errBox.innerHTML = "<b>Connection Lost</b><br><br>The ESP32 is offline, powered down, or lost Wi-Fi.";
+                            errBox.innerHTML = "<b>Connection Lost</b><br><br>The Bot is offline, powered down, or lost Wi-Fi.";
                         };
                         
                         // Fetch the new frame
