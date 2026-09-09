@@ -1,139 +1,87 @@
 const express = require('express');
 const app = express();
-
-// Add basic CORS so the local App Inventor HTML can fetch data from Render
-app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, X-Object-Height");
-    next();
-});
-
-// Configure Express to accept raw binary data and JSON
-app.use(express.raw({ type: 'image/jpeg', limit: '10mb' }));
-app.use(express.json()); 
-
-// Global variables
-let currentCommand = { pan: 90, tilt: 90, action: "stop" };
-let latestImage = null;
-let latestHeight = "0.00"; 
-let lastUploadTime = 0; // Tracks the exact millisecond the last frame arrived
-
-app.get('/', (req, res) => {
-    res.send('🤖 AI Armbot Server is online!');
-});
-
-// 1. Endpoint for ESP32-CAM (Uploads image & height, gets commands)
-app.post('/upload', (req, res) => {
-    if (req.body && req.body.length > 0) {
-        latestImage = req.body;
-        lastUploadTime = Date.now(); // Reset the timeout clock
-        
-        // Extract the ultrasonic height data from the custom header
-        if (req.headers['x-object-height']) {
-            latestHeight = req.headers['x-object-height'];
-        }
-    }
-    res.json(currentCommand);
-});
-
-// 2. Endpoint for App Inventor manual  controls
-app.post('/update-command', (req, res) => {
-    currentCommand = {
-        pan: req.body.pan !== undefined ? req.body.pan : currentCommand.pan,
-        tilt: req.body.tilt !== undefined ? req.body.tilt : currentCommand.tilt,
-        action: req.body.action !== undefined ? req.body.action : currentCommand.action
-    };
-    res.json({ status: "success", command: currentCommand });
-});
-
-// 3. Endpoint for the AI Agent to fetch the sensor data on demand
-app.get('/sensor-data', (req, res) => {
-    // If we haven't received data in 3 seconds, the bot is offline
-    const isOnline = (Date.now() - lastUploadTime) < 3000;
-    
-    res.json({
-        online: isOnline,
-        height: isOnline ? latestHeight : "Error: Sensor disconnected",
-        lastUpdateMs: Date.now() - lastUploadTime
-    });
-});
-
-// 4. Endpoint to serve the raw image data (returns 404 if timed out)
-app.get('/image', (req, res) => {
-    if (latestImage && (Date.now() - lastUploadTime < 3000)) {
-        res.setHeader('Content-Type', 'image/jpeg');
-        res.send(latestImage);
-    } else {
-        // Send a 404 error if the ESP32 crashed or lost Wi-Fi
-        res.status(404).send('Camera feed unavailable.');
-    }
-});
-
-// 5. Smart Stream Endpoint with Error Handling UI
-app.get('/stream', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-            <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                <style>
-                    body { margin: 0; background-color: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
-                    img { height: auto; width: auto; max-width: 100%; transform: rotate(0deg); display: none; }
-                    #errorBox { 
-                        display: block; 
-                        text-align: center; 
-                        color: #ff4444; 
-                        padding: 20px; 
-                        border: 2px solid #ff4444; 
-                        border-radius: 8px; 
-                        background: rgba(255,0,0,0.1); 
-                        width: 80%;
-                        max-width: 300px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div id="errorBox">Waiting for Armbot connection...</div>
-                <img id="feed" alt="Live Feed" />
-                
-                <script>
-                    const img = document.getElementById('feed');
-                    const errBox = document.getElementById('errorBox');
-                    
-                    setInterval(() => {
-                        const tempImg = new Image();
-                        
-                        // If the image loads successfully (200 OK)
-                        tempImg.onload = () => {
-                            img.src = tempImg.src;
-                            img.style.display = 'block';
-                            errBox.style.display = 'none';
-                        };
-                        
-                        // If the server returns a 404 error (Timeout)
-                        tempImg.onerror = () => {
-                            img.style.display = 'none';
-                            errBox.style.display = 'block';
-                            errBox.innerHTML = "<b>Connection Lost</b><br><br>The Bot is offline, powered down, or lost Wi-Fi.";
-                        };
-                        
-                        // Fetch the new frame
-                        tempImg.src = '/image?' + new Date().getTime();
-                    }, 250); // Refresh 4 times a second
-                </script>
-            </body>
-        </html>
-    `);
-});
-
 const PORT = process.env.PORT || 3000;
 
+// JSON body parsing — used by /update-command and any other JSON routes.
+// NOTE: this does NOT parse the /upload route, because the ESP32 posts
+// Content-Type: image/jpeg, which express.json() silently ignores
+// (req.body ends up undefined, and latestFrame was never actually set).
+app.use(express.json({ limit: '10mb' }));
+
+// Raw binary parser used ONLY on the JPEG upload endpoint.
+const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
+
+// Global Bot State containing all servos, motors, toggles, and sequence commands
+let botState = {
+    pan: 90,
+    tilt: 90,
+    action: "stop",
+    flash: false,
+    laser: false,
+    speed: 90,
+    neck: 90,
+    shoulder: 90,
+    elbow: 90,
+    wrist: 90,
+    rotation: 90,
+    command: "idle"
+};
+
+let latestFrame = null;
+let objectHeight = 0.0;
+
+// 1. ESP32 Upload Endpoint (Receives JPEG frame + height, returns botState JSON)
+app.post('/upload', rawImageParser, (req, res) => {
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        latestFrame = req.body;
+    }
+    if (req.headers['x-object-height']) {
+        objectHeight = parseFloat(req.headers['x-object-height']);
+    }
+    res.json(botState);
+});
+
+// 2. Image Stream Endpoint for WebViewer Background
+app.get('/image', (req, res) => {
+    if (!latestFrame) return res.status(404).send('No frame available');
+    res.writeHead(200, {
+        'Content-Type': 'image/jpeg',
+        'Content-Length': latestFrame.length
+    });
+    res.end(latestFrame);
+});
+
+// 3. Command Update Endpoint (Receives JSON payloads from App Inventor or HTML UI)
+app.post('/update-command', (req, res) => {
+    // Toggles
+    if (req.body.flash === "toggle") botState.flash = !botState.flash;
+    if (req.body.laser === "toggle") botState.laser = !botState.laser;
+    if (typeof req.body.flash === "boolean") botState.flash = req.body.flash;
+    if (typeof req.body.laser === "boolean") botState.laser = req.body.laser;
+
+    // Direct Arm Sliders & Joysticks
+    if (req.body.pan !== undefined) botState.pan = req.body.pan;
+    if (req.body.tilt !== undefined) botState.tilt = req.body.tilt;
+    if (req.body.speed !== undefined) botState.speed = req.body.speed;
+    if (req.body.neck !== undefined) botState.neck = req.body.neck;
+    if (req.body.shoulder !== undefined) botState.shoulder = req.body.shoulder;
+    if (req.body.elbow !== undefined) botState.elbow = req.body.elbow;
+    if (req.body.wrist !== undefined) botState.wrist = req.body.wrist;
+    if (req.body.rotation !== undefined) botState.rotation = req.body.rotation;
+
+    // Drive Motors & Sequence Commands (save, run, pause, reset)
+    if (req.body.action !== undefined) botState.action = req.body.action;
+    if (req.body.command !== undefined) botState.command = req.body.command;
+
+    res.json({ status: "success", state: botState });
+});
+
+// 4. Full-Screen Landscape PUBG-Style HTML Controller Interface
 app.get('/controller', (req, res) => {
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
-            <!-- Forces mobile scaling, locks zoom and touch gestures -->
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
@@ -142,24 +90,19 @@ app.get('/controller', (req, res) => {
                     background: #000; color: white; font-family: sans-serif;
                     overflow: hidden; touch-action: none; position: relative;
                 }
-                
-                /* Fullscreen Landscape Video Feed */
                 #video-area {
                     position: absolute; top: 0; left: 0;
                     width: 100%; height: 100%; z-index: 1;
                     display: flex; justify-content: center; align-items: center;
                 }
                 img { 
-                    width: 100%; height: 100%; 
-                    object-fit: cover; /* Spans full screen landscape like a mobile game */
+                    width: 100%; height: 100%; object-fit: cover; 
                     transform: rotate(180deg); display: none; 
                 }
                 #errorBox { 
                     color: #ff4444; border: 2px solid #ff4444; padding: 20px; 
                     border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
                 }
-
-                /* PUBG-Style Floating Overlay Joysticks */
                 .joystick-container {
                     position: absolute; bottom: 25px;
                     width: 140px; height: 140px; border-radius: 50%;
@@ -168,11 +111,8 @@ app.get('/controller', (req, res) => {
                     z-index: 10; display: flex; justify-content: center; align-items: center;
                     transition: opacity 0.2s ease, background 0.2s ease;
                 }
-                
-                #joy-left { left: 40px; }   /* Left Thumb: Servos (Pan/Tilt) */
-                #joy-right { right: 40px; } /* Right Thumb: Motors (Drive) */
-
-                /* Joystick Thumb Knob */
+                #joy-left { left: 40px; }
+                #joy-right { right: 40px; }
                 .stick {
                     width: 60px; height: 60px; border-radius: 50%;
                     background: rgba(138, 180, 248, 0.4);
@@ -180,8 +120,6 @@ app.get('/controller', (req, res) => {
                     position: absolute; pointer-events: none;
                     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
                 }
-
-                /* Active State: Highlights when pressed */
                 .joystick-container.active {
                     background: rgba(42, 42, 44, 0.75);
                     border-color: rgba(255, 255, 255, 0.9);
@@ -189,8 +127,6 @@ app.get('/controller', (req, res) => {
                 .joystick-container.active .stick {
                     background: rgba(138, 180, 248, 0.85);
                 }
-
-                /* Corner HUD Label */
                 .hud-label {
                     position: absolute; top: 15px; left: 20px; z-index: 10;
                     font-size: 12px; font-weight: bold; letter-spacing: 1px;
@@ -201,36 +137,27 @@ app.get('/controller', (req, res) => {
         </head>
         <body>
             <div class="hud-label">AI ARMBOT HUD</div>
-
-            <!-- Video Stream Background -->
             <div id="video-area">
                 <div id="errorBox">Connecting to Armbot...</div>
                 <img id="feed" alt="Live Stream" />
             </div>
-            
-            <!-- Left Thumb (Servos) & Right Thumb (Motors) -->
             <div id="joy-left" class="joystick-container"><div id="stick-left" class="stick"></div></div>
             <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
-
             <script>
-                // --- 1. Video Stream Refresher ---
                 const img = document.getElementById('feed');
                 const errBox = document.getElementById('errorBox');
                 setInterval(() => {
                     const tempImg = new Image();
                     tempImg.onload = () => { img.src = tempImg.src; img.style.display = 'block'; errBox.style.display = 'none'; };
-                    tempImg.onerror = () => { img.style.display = 'none'; errBox.style.display = 'block'; errBox.innerHTML = "<b>Connection Lost</b><br>Armbot Offline"; };
+                    tempImg.onerror = () => { img.style.display = 'none'; errBox.style.display = 'block'; errBox.innerHTML = "<b>Connection Lost</b>"; };
                     tempImg.src = '/image?' + new Date().getTime();
                 }, 200);
 
-                // --- 2. Telemetry Transmission ---
                 let botState = { pan: 90, tilt: 90, action: "stop" };
                 let lastSent = 0;
-
                 function sendCommand() {
-                    if (Date.now() - lastSent < 100) return; // Cap at 10 requests/sec
+                    if (Date.now() - lastSent < 100) return;
                     lastSent = Date.now();
-
                     fetch('/update-command', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -238,7 +165,6 @@ app.get('/controller', (req, res) => {
                     }).catch(err => console.error("Update failed:", err));
                 }
 
-                // --- 3. Multi-Touch Control Engine ---
                 class OverlayJoystick {
                     constructor(baseId, stickId, isServo) {
                         this.base = document.getElementById(baseId);
@@ -248,17 +174,8 @@ app.get('/controller', (req, res) => {
                         this.active = false;
                         this.centerX = 0; this.centerY = 0;
 
-                        const start = (e) => { 
-                            this.active = true; 
-                            this.base.classList.add('active'); 
-                            this.updateCenter(); 
-                            this.move(e); 
-                        };
-                        const end = () => { 
-                            this.active = false; 
-                            this.base.classList.remove('active'); 
-                            this.reset(); 
-                        };
+                        const start = (e) => { this.active = true; this.base.classList.add('active'); this.updateCenter(); this.move(e); };
+                        const end = () => { this.active = false; this.base.classList.remove('active'); this.reset(); };
                         const move = (e) => { if (this.active) this.move(e); };
 
                         this.base.addEventListener('mousedown', start);
@@ -268,43 +185,32 @@ app.get('/controller', (req, res) => {
                         window.addEventListener('mousemove', move);
                         window.addEventListener('touchmove', move, {passive: false});
                     }
-
                     updateCenter() {
                         const rect = this.base.getBoundingClientRect();
                         this.centerX = rect.left + (rect.width / 2);
                         this.centerY = rect.top + (rect.height / 2);
                     }
-
                     move(e) {
                         if (e.preventDefault) e.preventDefault();
                         let clientX = e.touches ? e.touches[0].clientX : e.clientX;
                         let clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
                         let dx = clientX - this.centerX;
                         let dy = clientY - this.centerY;
                         let distance = Math.sqrt(dx*dx + dy*dy);
-
                         if (distance > this.maxRadius) {
                             dx = (dx / distance) * this.maxRadius;
                             dy = (dy / distance) * this.maxRadius;
                         }
-
                         this.stick.style.transform = \`translate(\${dx}px, \${dy}px)\`;
                         this.processData(dx, dy);
                     }
-
                     reset() {
                         this.stick.style.transform = \`translate(0px, 0px)\`;
-                        if (!this.isServo) {
-                            botState.action = "stop"; 
-                            sendCommand();
-                        }
+                        if (!this.isServo) { botState.action = "stop"; sendCommand(); }
                     }
-
                     processData(dx, dy) {
                         let nx = dx / this.maxRadius; 
                         let ny = dy / this.maxRadius;
-
                         if (this.isServo) {
                             botState.pan = Math.round(90 + (nx * 90));
                             botState.tilt = Math.round(90 + (ny * -90));
@@ -316,7 +222,6 @@ app.get('/controller', (req, res) => {
                         sendCommand();
                     }
                 }
-
                 new OverlayJoystick('joy-left', 'stick-left', true);
                 new OverlayJoystick('joy-right', 'stick-right', false);
             </script>
@@ -324,6 +229,5 @@ app.get('/controller', (req, res) => {
         </html>
     `);
 });
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
