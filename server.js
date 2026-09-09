@@ -36,7 +36,7 @@ app.post('/upload', (req, res) => {
     res.json(currentCommand);
 });
 
-// 2. Endpoint for App Inventor manual controls
+// 2. Endpoint for App Inventor manual  controls
 app.post('/update-command', (req, res) => {
     currentCommand = {
         pan: req.body.pan !== undefined ? req.body.pan : currentCommand.pan,
