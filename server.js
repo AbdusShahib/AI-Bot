@@ -1,38 +1,42 @@
 const express = require('express');
 const app = express();
 
+// Add basic CORS so the local App Inventor HTML can fetch data from Render
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, X-Object-Height");
+    next();
+});
+
+// Configure Express to accept raw binary data and JSON
 app.use(express.raw({ type: 'image/jpeg', limit: '10mb' }));
 app.use(express.json()); 
 
-// Global variables to store the robot's state
-let currentCommand = {
-    pan: 90,
-    tilt: 90,
-    action: "stop"
-};
-let latestImage = null; 
-let latestHeight = "0.0"; // Stores the ultrasonic height
+// Global variables
+let currentCommand = { pan: 90, tilt: 90, action: "stop" };
+let latestImage = null;
+let latestHeight = "0.00"; 
+let lastUploadTime = 0; // Tracks the exact millisecond the last frame arrived
 
-// 0. Default Home Route
 app.get('/', (req, res) => {
-    res.send('🤖 Robot Server is online and streaming successfully!');
+    res.send('🤖 AI Armbot Server is online!');
 });
 
 // 1. Endpoint for ESP32-CAM (Uploads image & height, gets commands)
 app.post('/upload', (req, res) => {
     if (req.body && req.body.length > 0) {
-        latestImage = req.body; 
+        latestImage = req.body;
+        lastUploadTime = Date.now(); // Reset the timeout clock
+        
+        // Extract the ultrasonic height data from the custom header
+        if (req.headers['x-object-height']) {
+            latestHeight = req.headers['x-object-height'];
+        }
     }
-    
-    // Extract the height data sent in the custom header
-    if (req.headers['x-object-height']) {
-        latestHeight = req.headers['x-object-height'];
-    }
-    
     res.json(currentCommand);
 });
 
-// 2. Endpoint for App Inventor
+// 2. Endpoint for App Inventor manual controls
 app.post('/update-command', (req, res) => {
     currentCommand = {
         pan: req.body.pan !== undefined ? req.body.pan : currentCommand.pan,
@@ -42,23 +46,30 @@ app.post('/update-command', (req, res) => {
     res.json({ status: "success", command: currentCommand });
 });
 
-// 3. Endpoint to serve the raw image data
+// 3. Endpoint for the AI Agent to fetch the sensor data on demand
+app.get('/sensor-data', (req, res) => {
+    // If we haven't received data in 3 seconds, the bot is offline
+    const isOnline = (Date.now() - lastUploadTime) < 3000;
+    
+    res.json({
+        online: isOnline,
+        height: isOnline ? latestHeight : "Error: Sensor disconnected",
+        lastUpdateMs: Date.now() - lastUploadTime
+    });
+});
+
+// 4. Endpoint to serve the raw image data (returns 404 if timed out)
 app.get('/image', (req, res) => {
-    if (latestImage) {
+    if (latestImage && (Date.now() - lastUploadTime < 3000)) {
         res.setHeader('Content-Type', 'image/jpeg');
         res.send(latestImage);
     } else {
-        // If no image is stored, send a 404 error
-        res.status(404).send('No image received yet.');
+        // Send a 404 error if the ESP32 crashed or lost Wi-Fi
+        res.status(404).send('Camera feed unavailable.');
     }
 });
 
-// 4. New Endpoint to serve just the height data
-app.get('/height', (req, res) => {
-    res.send(latestHeight);
-});
-
-// 5. Endpoint to stream the video feed and display UI
+// 5. Smart Stream Endpoint with Error Handling UI
 app.get('/stream', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -66,92 +77,49 @@ app.get('/stream', (req, res) => {
             <head>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                 <style>
-                    body {
-                        margin: 0;
-                        background-color: #000;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        height: 100vh;
-                        overflow: hidden;
-                        font-family: sans-serif;
-                    }
-                    #feed-container {
-                        position: relative;
-                        width: 100%;
-                        max-width: 640px;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                    }
-                    img {
-                        width: 100%;
-                        transform: rotate(90deg); 
-                        z-index: 1;
-                    }
-                    #hud {
-                        position: absolute;
-                        top: 10px;
-                        left: 10px;
-                        background: rgba(0, 0, 0, 0.7);
-                        color: #00ffcc;
-                        padding: 8px 12px;
-                        border-radius: 5px;
-                        font-weight: bold;
-                        z-index: 10;
-                    }
-                    #error-msg {
-                        position: absolute;
-                        color: #ff4a4a;
-                        background: rgba(20, 0, 0, 0.8);
-                        padding: 15px;
-                        border: 1px solid #ff4a4a;
-                        border-radius: 8px;
-                        text-align: center;
-                        font-weight: bold;
-                        z-index: 5;
-                        display: none; /* Hidden by default */
+                    body { margin: 0; background-color: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+                    img { width: 100%; max-width: 640px; transform: rotate(90deg); display: none; }
+                    #errorBox { 
+                        display: block; 
+                        text-align: center; 
+                        color: #ff4444; 
+                        padding: 20px; 
+                        border: 2px solid #ff4444; 
+                        border-radius: 8px; 
+                        background: rgba(255,0,0,0.1); 
+                        width: 80%;
+                        max-width: 300px;
                     }
                 </style>
             </head>
             <body>
-                <div id="feed-container">
-                    <div id="hud">Obj Height: <span id="height-val">0.0</span> cm</div>
-                    <div id="error-msg">⚠️ Video feed unavailable.<br><br>ESP32 is offline or not sending frames.</div>
-                    <img id="feed" src="/image" alt="Live Feed" />
-                </div>
+                <div id="errorBox">Waiting for Armbot connection...</div>
+                <img id="feed" alt="Live Feed" />
                 
                 <script>
                     const img = document.getElementById('feed');
-                    const errorMsg = document.getElementById('error-msg');
-                    const heightVal = document.getElementById('height-val');
-
-                    // If the server returns 404, show the error message and hide the broken image
-                    img.onerror = () => {
-                        img.style.display = 'none';
-                        errorMsg.style.display = 'block';
-                    };
+                    const errBox = document.getElementById('errorBox');
                     
-                    // If the image loads successfully, hide the error message
-                    img.onload = () => {
-                        img.style.display = 'block';
-                        errorMsg.style.display = 'none';
-                    };
-
                     setInterval(() => {
-                        // Refresh Image
-                        img.src = '/image?' + new Date().getTime();
+                        const tempImg = new Image();
                         
-                        // Fetch the latest height from the server independently
-                        fetch('/height')
-                            .then(response => response.text())
-                            .then(data => {
-                                // Convert to a clean number with 1 decimal place
-                                let h = parseFloat(data);
-                                heightVal.innerText = isNaN(h) ? "0.0" : h.toFixed(1);
-                            })
-                            .catch(err => console.error(err));
-                    }, 200); // 5 FPS
+                        // If the image loads successfully (200 OK)
+                        tempImg.onload = () => {
+                            img.src = tempImg.src;
+                            img.style.display = 'block';
+                            errBox.style.display = 'none';
+                        };
+                        
+                        // If the server returns a 404 error (Timeout)
+                        tempImg.onerror = () => {
+                            img.style.display = 'none';
+                            errBox.style.display = 'block';
+                            errBox.innerHTML = "<b>Connection Lost</b><br><br>The ESP32 is offline, powered down, or lost Wi-Fi.";
+                        };
+                        
+                        // Fetch the new frame
+                        tempImg.src = '/image?' + new Date().getTime();
+                    }, 250); // Refresh 4 times a second
                 </script>
             </body>
         </html>
@@ -160,5 +128,5 @@ app.get('/stream', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(\`Server is running on port \${PORT}\`);
 });
