@@ -42,6 +42,9 @@ app.post('/upload', rawImageParser, (req, res) => {
 });
 
 // 2. Image Stream Endpoint for WebViewer Background
+app.get('/state', (req, res) => {
+    res.json(botState);
+});
 app.get('/image', (req, res) => {
     if (!latestFrame) return res.status(404).send('No frame available');
     res.writeHead(200, {
@@ -154,15 +157,13 @@ app.get('/controller', (req, res) => {
                     border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
                 }
                 .joystick-container {
-                    position: absolute; bottom: 25px;
+                    position: absolute; bottom: 25px; right: 40px;
                     width: 140px; height: 140px; border-radius: 50%;
                     background: rgba(42, 42, 44, 0.3); 
                     border: 3px solid rgba(255, 255, 255, 0.3);
                     z-index: 10; display: flex; justify-content: center; align-items: center;
                     transition: opacity 0.2s ease, background 0.2s ease;
                 }
-                #joy-left { left: 40px; }
-                #joy-right { right: 40px; }
                 .stick {
                     width: 60px; height: 60px; border-radius: 50%;
                     background: rgba(138, 180, 248, 0.4);
@@ -186,12 +187,12 @@ app.get('/controller', (req, res) => {
             </style>
         </head>
         <body>
-            <div class="hud-label">AI ARMBOT HUD</div>
+            <div class="hud-label">AI ARMBOT HUD (SLIDER MODE)</div>
             <div id="video-area">
                 <div id="errorBox">Connecting to Armbot...</div>
                 <img id="feed" alt="Live Stream" />
             </div>
-            <div id="joy-left" class="joystick-container"><div id="stick-left" class="stick"></div></div>
+            <!-- Left joystick removed; only right motor joystick remains -->
             <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
             <script>
                 const img = document.getElementById('feed');
@@ -203,7 +204,7 @@ app.get('/controller', (req, res) => {
                     tempImg.src = '/image?' + new Date().getTime();
                 }, 200);
 
-                let botState = { pan: 90, tilt: 90, action: "stop" };
+                let botState = { action: "stop" };
                 let lastSent = 0;
                 function sendCommand() {
                     if (Date.now() - lastSent < 100) return;
@@ -216,10 +217,9 @@ app.get('/controller', (req, res) => {
                 }
 
                 class OverlayJoystick {
-                    constructor(baseId, stickId, isServo) {
+                    constructor(baseId, stickId) {
                         this.base = document.getElementById(baseId);
                         this.stick = document.getElementById(stickId);
-                        this.isServo = isServo;
                         this.maxRadius = 55; 
                         this.active = false;
                         this.centerX = 0; this.centerY = 0;
@@ -252,31 +252,27 @@ app.get('/controller', (req, res) => {
                             dy = (dy / distance) * this.maxRadius;
                         }
                         this.stick.style.transform = \`translate(\${dx}px, \${dy}px)\`;
-                        this.processData(dx, dy);
+                        this.processData(dy);
                     }
                     reset() {
                         this.stick.style.transform = \`translate(0px, 0px)\`;
-                        if (!this.isServo) { botState.action = "stop"; sendCommand(); }
+                        botState.action = "stop"; 
+                        sendCommand();
                     }
-                    processData(dx, dy) {
-                        let nx = dx / this.maxRadius; 
+                    processData(dy) {
                         let ny = dy / this.maxRadius;
-                        if (this.isServo) {
-                            botState.pan = Math.round(90 + (nx * 90));
-                            botState.tilt = Math.round(90 + (ny * -90));
-                        } else {
-                            if (ny < -0.35) botState.action = "forward";
-                            else if (ny > 0.35) botState.action = "reverse";
-                            else botState.action = "stop";
-                        }
+                        if (ny < -0.35) botState.action = "forward";
+                        else if (ny > 0.35) botState.action = "reverse";
+                        else botState.action = "stop";
                         sendCommand();
                     }
                 }
-                new OverlayJoystick('joy-left', 'stick-left', true);
-                new OverlayJoystick('joy-right', 'stick-right', false);
+                // Only initialize the motor joystick; camera joystick code completely removed
+                new OverlayJoystick('joy-right', 'stick-right');
             </script>
         </body>
         </html>
+
     `);
 });
 
