@@ -2,16 +2,9 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// JSON body parsing — used by /update-command and any other JSON routes.
-// NOTE: this does NOT parse the /upload route, because the ESP32 posts
-// Content-Type: image/jpeg, which express.json() silently ignores
-// (req.body ends up undefined, and latestFrame was never actually set).
 app.use(express.json({ limit: '10mb' }));
-
-// Raw binary parser used ONLY on the JPEG upload endpoint.
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
 
-// Global Bot State containing all servos, motors, toggles, and sequence commands
 let botState = {
     pan: 90,
     tilt: 90,
@@ -27,10 +20,24 @@ let botState = {
     command: "idle"
 };
 
+// Bumped on every ACTUAL change to botState (see setField below). The ESP32
+// polls /state?v=<lastKnownVersion> — if that matches stateVersion, nothing
+// has changed and it gets back a 1-field {"v":N} instead of the full state,
+// so most 20Hz polls cost almost nothing to send or parse.
+let stateVersion = 0;
+
 let latestFrame = null;
 let objectHeight = 0.0;
 
-// 1. ESP32 Upload Endpoint (Receives JPEG frame + height, returns botState JSON)
+// Sets botState[key] = value only if it actually differs; returns whether it changed.
+function setField(key, value) {
+    if (botState[key] !== value) {
+        botState[key] = value;
+        return true;
+    }
+    return false;
+}
+
 app.post('/upload', rawImageParser, (req, res) => {
     if (Buffer.isBuffer(req.body) && req.body.length > 0) {
         latestFrame = req.body;
@@ -41,10 +48,6 @@ app.post('/upload', rawImageParser, (req, res) => {
     res.json(botState);
 });
 
-// 2. Image Stream Endpoint for WebViewer Background
-app.get('/state', (req, res) => {
-    res.json(botState);
-});
 app.get('/image', (req, res) => {
     if (!latestFrame) return res.status(404).send('No frame available');
     res.writeHead(200, {
@@ -54,9 +57,18 @@ app.get('/image', (req, res) => {
     res.end(latestFrame);
 });
 
-// 2b. Full-bleed auto-refreshing video page — used by Screen1's WebViewer2
-// as a plain background feed (no joysticks/controls, just the picture).
-// This is what https://ai-bot-m5b2.onrender.com/stream serves.
+// Version-gated minimal-payload state endpoint. The ESP32 sends the version
+// it last saw as ?v=N; if that's still current, respond with just {"v":N}
+// (no serialization/parsing overhead for a no-op poll). Otherwise send the
+// full state plus the new version.
+app.get('/state', (req, res) => {
+    const clientVersion = parseInt(req.query.v, 10);
+    if (!Number.isNaN(clientVersion) && clientVersion === stateVersion) {
+        return res.json({ v: stateVersion });
+    }
+    res.json({ ...botState, v: stateVersion });
+});
+
 app.get('/stream', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -65,23 +77,10 @@ app.get('/stream', (req, res) => {
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
-                body, html {
-                    margin: 0; padding: 0; width: 100vw; height: 100vh;
-                    background: #000; overflow: hidden;
-                }
-                #video-area {
-                    width: 100%; height: 100%;
-                    display: flex; justify-content: center; align-items: center;
-                }
-                img {
-                    width: 100%; height: 100%; object-fit: cover;
-                    transform: rotate(180deg); display: none;
-                }
-                #errorBox {
-                    color: #ff4444; border: 2px solid #ff4444; padding: 20px;
-                    border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
-                    font-family: sans-serif;
-                }
+                body, html { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+                #video-area { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
+                img { width: 100%; height: 100%; object-fit: cover; transform: rotate(180deg); display: none; }
+                #errorBox { color: #ff4444; border: 2px solid #ff4444; padding: 20px; border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center; font-family: sans-serif; }
             </style>
         </head>
         <body>
@@ -104,32 +103,33 @@ app.get('/stream', (req, res) => {
     `);
 });
 
-// 3. Command Update Endpoint (Receives JSON payloads from App Inventor or HTML UI)
+// Every write goes through setField so stateVersion only moves on a real
+// change — repeated identical POSTs (e.g. a slider re-sending the same
+// value) don't force an extra full /state payload on the next ESP32 poll.
 app.post('/update-command', (req, res) => {
-    // Toggles
-    if (req.body.flash === "toggle") botState.flash = !botState.flash;
-    if (req.body.laser === "toggle") botState.laser = !botState.laser;
-    if (typeof req.body.flash === "boolean") botState.flash = req.body.flash;
-    if (typeof req.body.laser === "boolean") botState.laser = req.body.laser;
+    let changed = false;
 
-    // Direct Arm Sliders & Joysticks
-    if (req.body.pan !== undefined) botState.pan = req.body.pan;
-    if (req.body.tilt !== undefined) botState.tilt = req.body.tilt;
-    if (req.body.speed !== undefined) botState.speed = req.body.speed;
-    if (req.body.neck !== undefined) botState.neck = req.body.neck;
-    if (req.body.shoulder !== undefined) botState.shoulder = req.body.shoulder;
-    if (req.body.elbow !== undefined) botState.elbow = req.body.elbow;
-    if (req.body.wrist !== undefined) botState.wrist = req.body.wrist;
-    if (req.body.rotation !== undefined) botState.rotation = req.body.rotation;
+    if (req.body.flash === "toggle") { botState.flash = !botState.flash; changed = true; }
+    if (req.body.laser === "toggle") { botState.laser = !botState.laser; changed = true; }
+    if (typeof req.body.flash === "boolean" && setField('flash', req.body.flash)) changed = true;
+    if (typeof req.body.laser === "boolean" && setField('laser', req.body.laser)) changed = true;
 
-    // Drive Motors & Sequence Commands (save, run, pause, reset)
-    if (req.body.action !== undefined) botState.action = req.body.action;
-    if (req.body.command !== undefined) botState.command = req.body.command;
+    ['pan', 'tilt', 'speed', 'neck', 'shoulder', 'elbow', 'wrist', 'rotation'].forEach((key) => {
+        if (req.body[key] !== undefined && setField(key, req.body[key])) changed = true;
+    });
 
-    res.json({ status: "success", state: botState });
+    if (req.body.action !== undefined && setField('action', req.body.action)) changed = true;
+    if (req.body.command !== undefined && setField('command', req.body.command)) changed = true;
+
+    if (changed) stateVersion++;
+
+    res.json({ status: "success", state: botState, v: stateVersion });
 });
 
-// 4. Full-Screen Landscape PUBG-Style HTML Controller Interface
+// Screen 3 controller: video overlay only. The joystick is purely visual —
+// it does not call /update-command or send anything to the robot. Real
+// control now happens through the native App Inventor sliders/joysticks on
+// Screen 2, which talk to /update-command directly.
 app.get('/controller', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -162,7 +162,7 @@ app.get('/controller', (req, res) => {
                     background: rgba(42, 42, 44, 0.3); 
                     border: 3px solid rgba(255, 255, 255, 0.3);
                     z-index: 10; display: flex; justify-content: center; align-items: center;
-                    transition: opacity 0.2s ease, background 0.2s ease;
+                    pointer-events: auto;
                 }
                 .stick {
                     width: 60px; height: 60px; border-radius: 50%;
@@ -170,13 +170,6 @@ app.get('/controller', (req, res) => {
                     border: 2px solid rgba(255, 255, 255, 0.6);
                     position: absolute; pointer-events: none;
                     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-                }
-                .joystick-container.active {
-                    background: rgba(42, 42, 44, 0.75);
-                    border-color: rgba(255, 255, 255, 0.9);
-                }
-                .joystick-container.active .stick {
-                    background: rgba(138, 180, 248, 0.85);
                 }
                 .hud-label {
                     position: absolute; top: 15px; left: 20px; z-index: 10;
@@ -187,12 +180,11 @@ app.get('/controller', (req, res) => {
             </style>
         </head>
         <body>
-            <div class="hud-label">AI ARMBOT HUD (SLIDER MODE)</div>
+            <div class="hud-label">AI ARMBOT HUD (VISUAL OVERLAY)</div>
             <div id="video-area">
                 <div id="errorBox">Connecting to Armbot...</div>
                 <img id="feed" alt="Live Stream" />
             </div>
-            <!-- Left joystick removed; only right motor joystick remains -->
             <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
             <script>
                 const img = document.getElementById('feed');
@@ -204,19 +196,8 @@ app.get('/controller', (req, res) => {
                     tempImg.src = '/image?' + new Date().getTime();
                 }, 200);
 
-                let botState = { action: "stop" };
-                let lastSent = 0;
-                function sendCommand() {
-                    if (Date.now() - lastSent < 100) return;
-                    lastSent = Date.now();
-                    fetch('/update-command', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(botState)
-                    }).catch(err => console.error("Update failed:", err));
-                }
-
-                class OverlayJoystick {
+                // Purely visual joystick — no fetch(), no backend calls.
+                class VisualJoystick {
                     constructor(baseId, stickId) {
                         this.base = document.getElementById(baseId);
                         this.stick = document.getElementById(stickId);
@@ -224,8 +205,8 @@ app.get('/controller', (req, res) => {
                         this.active = false;
                         this.centerX = 0; this.centerY = 0;
 
-                        const start = (e) => { this.active = true; this.base.classList.add('active'); this.updateCenter(); this.move(e); };
-                        const end = () => { this.active = false; this.base.classList.remove('active'); this.reset(); };
+                        const start = (e) => { this.active = true; this.updateCenter(); this.move(e); };
+                        const end = () => { this.active = false; this.reset(); };
                         const move = (e) => { if (this.active) this.move(e); };
 
                         this.base.addEventListener('mousedown', start);
@@ -252,27 +233,15 @@ app.get('/controller', (req, res) => {
                             dy = (dy / distance) * this.maxRadius;
                         }
                         this.stick.style.transform = \`translate(\${dx}px, \${dy}px)\`;
-                        this.processData(dy);
                     }
                     reset() {
                         this.stick.style.transform = \`translate(0px, 0px)\`;
-                        botState.action = "stop"; 
-                        sendCommand();
-                    }
-                    processData(dy) {
-                        let ny = dy / this.maxRadius;
-                        if (ny < -0.35) botState.action = "forward";
-                        else if (ny > 0.35) botState.action = "reverse";
-                        else botState.action = "stop";
-                        sendCommand();
                     }
                 }
-                // Only initialize the motor joystick; camera joystick code completely removed
-                new OverlayJoystick('joy-right', 'stick-right');
+                new VisualJoystick('joy-right', 'stick-right');
             </script>
         </body>
         </html>
-
     `);
 });
 
