@@ -78,7 +78,7 @@ app.get('/stream', (req, res) => {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                 <style>
                     body { margin: 0; background-color: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
-                    img { width: 100%; max-width: 640px; transform: rotate(90deg); display: none; }
+                    img { width: 100%; max-width: 640px; transform: rotate(-90deg); display: none; }
                     #errorBox { 
                         display: block; 
                         text-align: center; 
