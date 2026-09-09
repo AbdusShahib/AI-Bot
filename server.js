@@ -127,6 +127,196 @@ app.get('/stream', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+app.get('/controller', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <!-- Forces mobile scaling, prevents browser pinch-zoom and pull-to-refresh -->
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>
+                * { box-sizing: border-box; }
+                body, html {
+                    margin: 0; padding: 0; width: 100%; height: 100%;
+                    background: #000; color: white; font-family: sans-serif;
+                    overflow: hidden; touch-action: none; position: relative;
+                }
+                
+                /* 1. Full-Screen Video Background */
+                #video-area {
+                    position: absolute; top: 0; left: 0;
+                    width: 100%; height: 100%; z-index: 1;
+                    display: flex; justify-content: center; align-items: center;
+                }
+                img { 
+                    width: 100%; height: 100%; 
+                    object-fit: cover; /* Fills screen completely while preserving aspect ratio */
+                    transform: rotate(180deg); display: none; 
+                }
+                #errorBox { 
+                    color: #ff4444; border: 2px solid #ff4444; padding: 20px; 
+                    border-radius: 8px; background: rgba(0,0,0,0.8); text-align: center;
+                }
+
+                /* 2. Floating Overlay Controls (70% Transparent / 30% Opacity) */
+                .joystick-container {
+                    position: absolute; bottom: 30px;
+                    width: 130px; height: 130px; border-radius: 50%;
+                    background: rgba(42, 42, 44, 0.3); 
+                    border: 3px solid rgba(255, 255, 255, 0.3);
+                    z-index: 10; display: flex; justify-content: center; align-items: center;
+                    transition: opacity 0.2s ease;
+                }
+                
+                #joy-left { left: 25px; }   /* Floating Left: Servos */
+                #joy-right { right: 25px; } /* Floating Right: Motors */
+
+                /* Thumbstick Knob */
+                .stick {
+                    width: 55px; height: 55px; border-radius: 50%;
+                    background: rgba(138, 180, 248, 0.5);
+                    border: 2px solid rgba(255, 255, 255, 0.6);
+                    position: absolute; pointer-events: none;
+                    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+                }
+
+                /* Active state: Brightens when touched */
+                .joystick-container.active {
+                    background: rgba(42, 42, 44, 0.7);
+                    border-color: rgba(255, 255, 255, 0.8);
+                }
+                .joystick-container.active .stick {
+                    background: rgba(138, 180, 248, 0.9);
+                }
+            </style>
+        </head>
+        <body>
+            <!-- Background Stream -->
+            <div id="video-area">
+                <div id="errorBox">Connecting to Armbot...</div>
+                <img id="feed" alt="Live Stream" />
+            </div>
+            
+            <!-- Hovering Overlay Joysticks -->
+            <div id="joy-left" class="joystick-container"><div id="stick-left" class="stick"></div></div>
+            <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
+
+            <script>
+                // --- 1. Video Feed Loop ---
+                const img = document.getElementById('feed');
+                const errBox = document.getElementById('errorBox');
+                setInterval(() => {
+                    const tempImg = new Image();
+                    tempImg.onload = () => { img.src = tempImg.src; img.style.display = 'block'; errBox.style.display = 'none'; };
+                    tempImg.onerror = () => { img.style.display = 'none'; errBox.style.display = 'block'; errBox.innerHTML = "<b>Connection Lost</b><br>Armbot Offline"; };
+                    tempImg.src = '/image?' + new Date().getTime();
+                }, 200);
+
+                // --- 2. State & HTTP Transmission ---
+                let botState = { pan: 90, tilt: 90, action: "stop" };
+                let lastSent = 0;
+
+                function sendCommand() {
+                    // Throttles to 10 HTTP updates/sec max to keep latency low
+                    if (Date.now() - lastSent < 100) return;
+                    lastSent = Date.now();
+
+                    fetch('/update-command', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(botState)
+                    }).catch(err => console.error("Update failed:", err));
+                }
+
+                // --- 3. Multi-Touch Joystick Engine ---
+                class OverlayJoystick {
+                    constructor(baseId, stickId, isServo) {
+                        this.base = document.getElementById(baseId);
+                        this.stick = document.getElementById(stickId);
+                        this.isServo = isServo;
+                        this.maxRadius = 50; 
+                        this.active = false;
+                        this.centerX = 0; this.centerY = 0;
+
+                        const start = (e) => { 
+                            this.active = true; 
+                            this.base.classList.add('active'); 
+                            this.updateCenter(); 
+                            this.move(e); 
+                        };
+                        const end = () => { 
+                            this.active = false; 
+                            this.base.classList.remove('active'); 
+                            this.reset(); 
+                        };
+                        const move = (e) => { if (this.active) this.move(e); };
+
+                        this.base.addEventListener('mousedown', start);
+                        this.base.addEventListener('touchstart', start, {passive: false});
+                        window.addEventListener('mouseup', end);
+                        window.addEventListener('touchend', end);
+                        window.addEventListener('mousemove', move);
+                        window.addEventListener('touchmove', move, {passive: false});
+                    }
+
+                    updateCenter() {
+                        const rect = this.base.getBoundingClientRect();
+                        this.centerX = rect.left + (rect.width / 2);
+                        this.centerY = rect.top + (rect.height / 2);
+                    }
+
+                    move(e) {
+                        if (e.preventDefault) e.preventDefault();
+                        let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                        let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                        let dx = clientX - this.centerX;
+                        let dy = clientY - this.centerY;
+                        let distance = Math.sqrt(dx*dx + dy*dy);
+
+                        if (distance > this.maxRadius) {
+                            dx = (dx / distance) * this.maxRadius;
+                            dy = (dy / distance) * this.maxRadius;
+                        }
+
+                        this.stick.style.transform = \`translate(\${dx}px, \${dy}px)\`;
+                        this.processData(dx, dy);
+                    }
+
+                    reset() {
+                        this.stick.style.transform = \`translate(0px, 0px)\`;
+                        if (!this.isServo) {
+                            botState.action = "stop"; 
+                            sendCommand();
+                        }
+                    }
+
+                    processData(dx, dy) {
+                        let nx = dx / this.maxRadius; 
+                        let ny = dy / this.maxRadius;
+
+                        if (this.isServo) {
+                            botState.pan = Math.round(90 + (nx * 90));
+                            botState.tilt = Math.round(90 + (ny * -90)); // Upper drag tilts camera up
+                        } else {
+                            if (ny < -0.35) botState.action = "forward";
+                            else if (ny > 0.35) botState.action = "reverse";
+                            else botState.action = "stop";
+                        }
+                        sendCommand();
+                    }
+                }
+
+                // Initialize left and right overlay joysticks
+                new OverlayJoystick('joy-left', 'stick-left', true);
+                new OverlayJoystick('joy-right', 'stick-right', false);
+            </script>
+        </body>
+        </html>
+    `);
+});
+
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
