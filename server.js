@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 3000;
 // Bump this string every time you redeploy. /state and the startup log both
 // print it, so you can always confirm what's actually live on Render instead
 // of guessing.
-const BUILD_VERSION = "armbot-server-2026-09-11-panel-c";
+const BUILD_VERSION = "armbot-server-2026-09-11-panel-d";
 
 // JSON body parsing — used by /update-command and any other JSON routes.
 // NOTE: this does NOT parse the /upload route, because the ESP32 posts
@@ -21,7 +21,7 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 // Raw binary parser used ONLY on the JPEG upload endpoint.
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
 
-// Global Bot State containing all servos, motors, toggles, and sequence  commands
+// Global Bot State containing all servos, motors, toggles, and sequence commands
 let botState = {
     pan: 90,
     tilt: 90,
@@ -308,10 +308,7 @@ app.get('/panel', (req, res) => {
                 </div>
 
                 <div class="control-bar">
-                    <div class="btn-row">
-                        <button class="btn-primary" onclick="applyNow()">APPLY</button>
-                        <button class="btn-danger" onclick="resetDefaults()">RESET</button>
-                    </div>
+                    <button class="btn-danger" onclick="resetDefaults()">RESET</button>
 
                     <div id="step-counter">Steps saved: <span id="step-count">0</span></div>
 
@@ -351,9 +348,22 @@ app.get('/panel', (req, res) => {
                     const slider = document.getElementById(k);
                     const span = document.getElementById('val-' + k);
                     updateFill(slider);
+
+                    // Live label + fill while dragging — no network traffic here.
                     slider.addEventListener('input', () => {
                         span.innerText = slider.value;
                         updateFill(slider);
+                    });
+
+                    // Only send to the robot once the slider is RELEASED.
+                    // 'change' fires on mouseup/touchend/keyup-commit, not on
+                    // every intermediate drag position — and only that one
+                    // field is sent, keeping the payload minimal.
+                    slider.addEventListener('change', () => {
+                        const value = parseInt(slider.value, 10);
+                        sendPayload({ [k]: value })
+                            .then(state => setStatus(k + ' -> ' + value + ' (build ' + state._serverBuild + ')'))
+                            .catch(err => setStatus('Error sending ' + k + ': ' + err.message));
                     });
                 });
 
@@ -373,16 +383,6 @@ app.get('/panel', (req, res) => {
                     });
                     const stateRes = await fetch('/state');
                     return await stateRes.json();
-                }
-
-                async function applyNow() {
-                    setStatus('Applying...');
-                    try {
-                        const state = await sendPayload(currentPayload());
-                        setStatus('Applied — server build ' + state._serverBuild);
-                    } catch (err) {
-                        setStatus('Error applying: ' + err.message);
-                    }
                 }
 
                 function updateStepCount() {
