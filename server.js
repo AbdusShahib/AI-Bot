@@ -18,32 +18,33 @@ let botState = {
     elbow: 90,
     wrist: 90,
     rotation: 90,
-    command: "idle"
+    command: "idle",
+    v: 1
 };
 
-// ... keep your latestFrame and /upload, /image, /stream routes here ...
+app.get('/state', (req, res) => {
+    res.json(botState);
+});
 
 app.post('/update-command', (req, res) => {
-    console.log("Received update-command payload:", req.body); // Check your Render logs!
-
-    if (req.body.flash === "toggle") botState.flash = !botState.flash;
-    if (req.body.laser === "toggle") botState.laser = !botState.laser;
-    if (typeof req.body.flash === "boolean") botState.flash = req.body.flash;
-    if (typeof req.body.laser === "boolean") botState.laser = req.body.laser;
-
-    if (req.body.pan !== undefined) botState.pan = Number(req.body.pan);
-    if (req.body.tilt !== undefined) botState.tilt = Number(req.body.tilt);
-    if (req.body.speed !== undefined) botState.speed = Number(req.body.speed);
-    if (req.body.neck !== undefined) botState.neck = Number(req.body.neck);
-    if (req.body.shoulder !== undefined) botState.shoulder = Number(req.body.shoulder);
-    if (req.body.elbow !== undefined) botState.elbow = Number(req.body.elbow);
-    if (req.body.wrist !== undefined) botState.wrist = Number(req.body.wrist);
-    if (req.body.rotation !== undefined) botState.rotation = Number(req.body.rotation);
-
-    if (req.body.action !== undefined) botState.action = req.body.action;
-    if (req.body.command !== undefined) botState.command = req.body.command;
-
-    res.json({ status: "success", state: botState });
+    try {
+        if (req.body.pan !== undefined) botState.pan = Number(req.body.pan);
+        if (req.body.tilt !== undefined) botState.tilt = Number(req.body.tilt);
+        if (req.body.speed !== undefined) botState.speed = Number(req.body.speed);
+        if (req.body.neck !== undefined) botState.neck = Number(req.body.neck);
+        if (req.body.shoulder !== undefined) botState.shoulder = Number(req.body.shoulder);
+        if (req.body.elbow !== undefined) botState.elbow = Number(req.body.elbow);
+        if (req.body.wrist !== undefined) botState.wrist = Number(req.body.wrist);
+        if (req.body.rotation !== undefined) botState.rotation = Number(req.body.rotation);
+        if (req.body.flash !== undefined) botState.flash = Boolean(req.body.flash);
+        if (req.body.laser !== undefined) botState.laser = Boolean(req.body.laser);
+        
+        botState.v++; // Increment version so ESP32 knows state changed
+        res.json({ status: "success", state: botState });
+    } catch (err) {
+        console.error("Server error on update-command:", err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/image', (req, res) => {
