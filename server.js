@@ -1,17 +1,22 @@
 const express = require('express');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Bump this string every time you redeploy. /state and the startup log both
 // print it, so you can always confirm what's actually live on Render instead
 // of guessing.
-const BUILD_VERSION = "armbot-server-2026-09-11-panel-b";
+const BUILD_VERSION = "armbot-server-2026-09-11-panel-c";
 
 // JSON body parsing — used by /update-command and any other JSON routes.
 // NOTE: this does NOT parse the /upload route, because the ESP32 posts
 // Content-Type: image/jpeg, which express.json() silently ignores
 // (req.body ends up undefined, and latestFrame was never actually set).
 app.use(express.json({ limit: '10mb' }));
+
+// Static assets (the arm diagram image for /panel). Put your arm image at
+// <project root>/public/robot-arm.png — it'll be served at /public/robot-arm.png.
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 // Raw binary parser used ONLY on the JPEG upload endpoint.
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
@@ -146,11 +151,20 @@ app.post('/update-command', (req, res) => {
     res.json({ status: "success", state: botState });
 });
 
-// 4. Control Panel — sliders for all 7 joints + speed, an APPLY (live) button,
-// a SAVE STEP button that records the current slider values into a
-// client-side sequence with a running counter, and a RUN SEQUENCE button
-// that plays the saved steps back in order. Meant to be loaded inside its
-// OWN WebViewer at /panel — separate from the joystick /controller below.
+// 4. Control Panel — diagram-style layout matching the reference arm image:
+// an arm illustration card on the left, joint sliders on the right, with
+// Neck/Speed broken out into their own footer box below (same structure as
+// the reference). Colors/buttons follow the same dark theme as the rest of
+// this app rather than the reference image's own palette.
+//
+// NOTE ON FIELD MAPPING: the row labeled "Grip" below is bound to the real
+// `tilt` field, not a separate gripper — there is no gripper servo wired up
+// yet, and this was already confirmed to be tilt earlier. There is no Pan
+// row here (the reference image doesn't have one); pan stays controllable
+// only from the /controller joystick.
+//
+// Drop your arm photo at <project root>/public/robot-arm.png to have it
+// appear in the arm card — a placeholder shows if it's missing.
 app.get('/panel', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -160,34 +174,69 @@ app.get('/panel', (req, res) => {
             <style>
                 * { box-sizing: border-box; }
                 body, html {
-                    margin: 0; padding: 0; width: 100vw; height: 100vh;
+                    margin: 0; padding: 0; width: 100vw; min-height: 100vh;
                     background: #131314; color: #e3e3e3; font-family: sans-serif;
-                    overflow: hidden; display: flex; flex-direction: row;
                 }
-                #video-area {
-                    flex: 1; height: 100%; background: #000;
-                    display: flex; justify-content: center; align-items: center; position: relative;
+                .page { max-width: 820px; margin: 0 auto; padding: 18px 16px 30px; }
+                h3 { margin: 0 0 4px 0; font-size: 15px; color: #fff; }
+                .note {
+                    font-size: 11px; color: #777; margin: 0 0 16px 0; font-style: italic;
                 }
-                img {
-                    width: 100%; height: 100%; object-fit: cover;
-                    transform: rotate(180deg); display: none;
+
+                .arm-slider-grid {
+                    display: flex; gap: 18px;
+                    background: #1e1f20; border: 1px solid #333; border-radius: 10px; padding: 16px;
                 }
-                #errorBox {
-                    color: #ff4444; border: 2px solid #ff4444; padding: 20px;
-                    border-radius: 8px; background: rgba(0,0,0,0.85); text-align: center;
+                .arm-card {
+                    width: 180px; flex-shrink: 0; background: #131314;
+                    border: 1px solid #333; border-radius: 8px;
+                    display: flex; align-items: center; justify-content: center;
+                    overflow: hidden; min-height: 340px;
                 }
-                #control-panel {
-                    width: 320px; height: 100%; background: #1e1f20;
-                    border-left: 1px solid #333; padding: 15px;
-                    display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
+                .arm-card img { width: 100%; height: auto; display: block; }
+                .arm-fallback {
+                    color: #666; font-size: 11px; text-align: center; padding: 20px;
+                    line-height: 1.6;
                 }
-                .slider-group { display: flex; flex-direction: column; gap: 4px; }
-                .slider-group label {
-                    font-size: 11px; font-weight: bold; text-transform: uppercase; color: #8ab4f8;
+                .arm-fallback code {
+                    display: block; margin-top: 6px; color: #8ab4f8; font-size: 11px;
                 }
+
+                .joint-rows { flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; }
+                .joint-row { display: flex; flex-direction: column; gap: 5px; }
+                .joint-label {
+                    font-size: 12px; font-weight: bold; text-transform: uppercase; color: #8ab4f8;
+                    display: flex; align-items: center; gap: 6px;
+                }
+                .joint-label .connector { width: 16px; height: 2px; background: #8ab4f8; display: inline-block; flex-shrink: 0; }
+                .joint-label .sub { font-size: 10px; color: #666; text-transform: none; font-weight: normal; }
                 .slider-row { display: flex; align-items: center; gap: 10px; }
-                .slider-row input[type=range] { flex: 1; accent-color: #8ab4f8; cursor: pointer; }
-                .slider-row span { width: 35px; text-align: right; font-size: 13px; font-family: monospace; }
+                .slider-row span.value { width: 32px; text-align: right; font-family: monospace; font-size: 13px; flex-shrink: 0; }
+
+                .footer-box {
+                    margin-top: 14px; background: #1e1f20; border: 1px solid #333; border-radius: 10px;
+                    padding: 16px; display: flex; flex-direction: column; gap: 16px;
+                }
+
+                input[type=range].dual {
+                    -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+                    border-radius: 3px; background: #2a2b2e; outline: none; cursor: pointer;
+                }
+                input[type=range].dual::-webkit-slider-thumb {
+                    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+                    background: #8ab4f8; border: 2px solid #131314; cursor: pointer;
+                    box-shadow: 0 0 0 1px #8ab4f8;
+                }
+                input[type=range].dual::-moz-range-thumb {
+                    width: 16px; height: 16px; border-radius: 50%;
+                    background: #8ab4f8; border: 2px solid #131314; cursor: pointer;
+                    box-shadow: 0 0 0 1px #8ab4f8;
+                }
+
+                .control-bar {
+                    margin-top: 18px; background: #1e1f20; border: 1px solid #333; border-radius: 10px;
+                    padding: 16px; display: flex; flex-direction: column; gap: 10px;
+                }
                 .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
                 button {
                     padding: 10px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;
@@ -201,12 +250,8 @@ app.get('/panel', (req, res) => {
                     font-size: 12px; color: #8ab4f8; text-align: center;
                     background: #131314; border-radius: 6px; padding: 6px;
                 }
-                #status-line {
-                    font-size: 11px; color: #888; text-align: center; min-height: 14px;
-                }
-                .delay-row {
-                    display: flex; align-items: center; gap: 8px; font-size: 12px;
-                }
+                #status-line { font-size: 11px; color: #888; text-align: center; min-height: 14px; }
+                .delay-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
                 .delay-row input[type=number] {
                     width: 70px; background: #131314; color: #e3e3e3; border: 1px solid #333;
                     border-radius: 4px; padding: 4px;
@@ -214,89 +259,102 @@ app.get('/panel', (req, res) => {
             </style>
         </head>
         <body>
-            <div id="video-area">
-                <div id="errorBox">Connecting to Armbot...</div>
-                <img id="feed" alt="Live Stream" />
-            </div>
-            <div id="control-panel">
-                <h3 style="margin: 0 0 5px 0; font-size: 14px; color: #fff;">Armbot Control Panel</h3>
+            <div class="page">
+                <h3>Armbot Control Panel</h3>
+                <p class="note">"Grip" below drives the tilt joint — no dedicated gripper servo is wired up yet. Pan isn't on this page; use /controller for that.</p>
 
-                <div class="slider-group">
-                    <label>Pan</label>
-                    <div class="slider-row"><input type="range" id="pan" min="0" max="180" value="90"><span id="val-pan">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Tilt</label>
-                    <div class="slider-row"><input type="range" id="tilt" min="0" max="180" value="90"><span id="val-tilt">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Neck</label>
-                    <div class="slider-row"><input type="range" id="neck" min="0" max="180" value="90"><span id="val-neck">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Shoulder</label>
-                    <div class="slider-row"><input type="range" id="shoulder" min="0" max="180" value="90"><span id="val-shoulder">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Elbow</label>
-                    <div class="slider-row"><input type="range" id="elbow" min="0" max="180" value="90"><span id="val-elbow">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Wrist</label>
-                    <div class="slider-row"><input type="range" id="wrist" min="0" max="180" value="90"><span id="val-wrist">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Rotation</label>
-                    <div class="slider-row"><input type="range" id="rotation" min="0" max="180" value="90"><span id="val-rotation">90</span></div>
-                </div>
-                <div class="slider-group">
-                    <label>Speed</label>
-                    <div class="slider-row"><input type="range" id="speed" min="0" max="180" value="90"><span id="val-speed">90</span></div>
+                <div class="arm-slider-grid">
+                    <div class="arm-card">
+                        <img id="arm-img" src="/public/robot-arm.png" alt="Robot arm"
+                             onerror="this.style.display='none'; document.getElementById('arm-fallback').style.display='block';">
+                        <div id="arm-fallback" class="arm-fallback" style="display:none;">
+                            Add your arm image at<code>public/robot-arm.png</code>
+                        </div>
+                    </div>
+
+                    <div class="joint-rows">
+                        <div class="joint-row">
+                            <div class="joint-label"><span class="connector"></span>Grip<span class="sub">(tilt)</span></div>
+                            <div class="slider-row"><input type="range" class="dual" id="tilt" min="0" max="180" value="90"><span class="value" id="val-tilt">90</span></div>
+                        </div>
+                        <div class="joint-row">
+                            <div class="joint-label"><span class="connector"></span>Rotation</div>
+                            <div class="slider-row"><input type="range" class="dual" id="rotation" min="0" max="180" value="90"><span class="value" id="val-rotation">90</span></div>
+                        </div>
+                        <div class="joint-row">
+                            <div class="joint-label"><span class="connector"></span>Wrist</div>
+                            <div class="slider-row"><input type="range" class="dual" id="wrist" min="0" max="180" value="90"><span class="value" id="val-wrist">90</span></div>
+                        </div>
+                        <div class="joint-row">
+                            <div class="joint-label"><span class="connector"></span>Elbow</div>
+                            <div class="slider-row"><input type="range" class="dual" id="elbow" min="0" max="180" value="90"><span class="value" id="val-elbow">90</span></div>
+                        </div>
+                        <div class="joint-row">
+                            <div class="joint-label"><span class="connector"></span>Shoulder</div>
+                            <div class="slider-row"><input type="range" class="dual" id="shoulder" min="0" max="180" value="90"><span class="value" id="val-shoulder">90</span></div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="btn-row">
-                    <button class="btn-primary" onclick="applyNow()">APPLY</button>
-                    <button class="btn-danger" onclick="resetDefaults()">RESET</button>
+                <div class="footer-box">
+                    <div class="joint-row">
+                        <div class="joint-label"><span class="connector"></span>Neck</div>
+                        <div class="slider-row"><input type="range" class="dual" id="neck" min="0" max="180" value="90"><span class="value" id="val-neck">90</span></div>
+                    </div>
+                    <div class="joint-row">
+                        <div class="joint-label"><span class="connector"></span>Speed</div>
+                        <div class="slider-row"><input type="range" class="dual" id="speed" min="0" max="180" value="90"><span class="value" id="val-speed">90</span></div>
+                    </div>
                 </div>
 
-                <div id="step-counter">Steps saved: <span id="step-count">0</span></div>
+                <div class="control-bar">
+                    <div class="btn-row">
+                        <button class="btn-primary" onclick="applyNow()">APPLY</button>
+                        <button class="btn-danger" onclick="resetDefaults()">RESET</button>
+                    </div>
 
-                <div class="btn-row">
-                    <button class="btn-save" onclick="saveStep()">SAVE STEP</button>
-                    <button class="btn-danger" onclick="clearSteps()">CLEAR STEPS</button>
+                    <div id="step-counter">Steps saved: <span id="step-count">0</span></div>
+
+                    <div class="btn-row">
+                        <button class="btn-save" onclick="saveStep()">SAVE STEP</button>
+                        <button class="btn-danger" onclick="clearSteps()">CLEAR STEPS</button>
+                    </div>
+
+                    <div class="delay-row">
+                        <label for="step-delay">Step delay (ms)</label>
+                        <input type="number" id="step-delay" min="200" step="100" value="1000">
+                    </div>
+
+                    <button class="btn-run" id="run-btn" onclick="runSequence()">RUN SEQUENCE</button>
+
+                    <div id="status-line"></div>
                 </div>
-
-                <div class="delay-row">
-                    <label for="step-delay">Step delay (ms)</label>
-                    <input type="number" id="step-delay" min="200" step="100" value="1000">
-                </div>
-
-                <button class="btn-run" id="run-btn" onclick="runSequence()">RUN SEQUENCE</button>
-
-                <div id="status-line"></div>
             </div>
 
             <script>
-                const img = document.getElementById('feed');
-                const errBox = document.getElementById('errorBox');
-                setInterval(() => {
-                    const tempImg = new Image();
-                    tempImg.onload = () => { img.src = tempImg.src; img.style.display = 'block'; errBox.style.display = 'none'; };
-                    tempImg.onerror = () => { img.style.display = 'none'; errBox.style.display = 'block'; errBox.innerHTML = "<b>Connection Lost</b>"; };
-                    tempImg.src = '/image?' + new Date().getTime();
-                }, 200);
-
-                const keys = ['pan', 'tilt', 'neck', 'shoulder', 'elbow', 'wrist', 'rotation', 'speed'];
+                // Fields on this page — deliberately no "pan" (see note above).
+                // The id "tilt" is used for the row labeled "Grip".
+                const keys = ['tilt', 'rotation', 'wrist', 'elbow', 'shoulder', 'neck', 'speed'];
                 const statusLine = document.getElementById('status-line');
                 const runBtn = document.getElementById('run-btn');
 
-                // Recorded sequence — client-side only, resets if this page reloads.
                 let steps = [];
+
+                function updateFill(slider) {
+                    const min = +slider.min, max = +slider.max, val = +slider.value;
+                    const pct = ((val - min) / (max - min)) * 100;
+                    slider.style.background =
+                        'linear-gradient(to right, #8ab4f8 0%, #8ab4f8 ' + pct + '%, #2a2b2e ' + pct + '%, #2a2b2e 100%)';
+                }
 
                 keys.forEach(k => {
                     const slider = document.getElementById(k);
                     const span = document.getElementById('val-' + k);
-                    slider.addEventListener('input', () => { span.innerText = slider.value; });
+                    updateFill(slider);
+                    slider.addEventListener('input', () => {
+                        span.innerText = slider.value;
+                        updateFill(slider);
+                    });
                 });
 
                 function currentPayload() {
@@ -305,13 +363,8 @@ app.get('/panel', (req, res) => {
                     return payload;
                 }
 
-                function setStatus(msg) {
-                    statusLine.innerText = msg;
-                }
+                function setStatus(msg) { statusLine.innerText = msg; }
 
-                // Sends the current sliders to /update-command, then confirms
-                // against GET /state (that's the only role /state plays here —
-                // it's a read-only report, not a place commands are sent).
                 async function sendPayload(payload) {
                     await fetch('/update-command', {
                         method: 'POST',
@@ -319,8 +372,7 @@ app.get('/panel', (req, res) => {
                         body: JSON.stringify(payload)
                     });
                     const stateRes = await fetch('/state');
-                    const state = await stateRes.json();
-                    return state;
+                    return await stateRes.json();
                 }
 
                 async function applyNow() {
@@ -349,15 +401,10 @@ app.get('/panel', (req, res) => {
                     setStatus('Sequence cleared');
                 }
 
-                function sleep(ms) {
-                    return new Promise(resolve => setTimeout(resolve, ms));
-                }
+                function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
                 async function runSequence() {
-                    if (steps.length === 0) {
-                        setStatus('No steps saved yet');
-                        return;
-                    }
+                    if (steps.length === 0) { setStatus('No steps saved yet'); return; }
                     const delayMs = Math.max(200, parseInt(document.getElementById('step-delay').value, 10) || 1000);
                     runBtn.disabled = true;
                     try {
@@ -376,8 +423,10 @@ app.get('/panel', (req, res) => {
 
                 function resetDefaults() {
                     keys.forEach(k => {
-                        document.getElementById(k).value = 90;
+                        const slider = document.getElementById(k);
+                        slider.value = 90;
                         document.getElementById('val-' + k).innerText = '90';
+                        updateFill(slider);
                     });
                     sendPayload({ ...currentPayload(), action: 'stop' })
                         .then(() => setStatus('Reset to defaults'))
