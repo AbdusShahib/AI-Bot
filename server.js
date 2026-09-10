@@ -45,7 +45,6 @@ app.post('/update-command', (req, res) => {
 
     res.json({ status: "success", state: botState });
 });
-});
 
 app.get('/image', (req, res) => {
     if (!latestFrame) return res.status(404).send('No frame available');
