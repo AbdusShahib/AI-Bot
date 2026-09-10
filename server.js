@@ -3,6 +3,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true })); // Added to catch form-style posts
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
 
 let botState = {
@@ -20,32 +21,30 @@ let botState = {
     command: "idle"
 };
 
-// Bumped on every ACTUAL change to botState (see setField below). The ESP32
-// polls /state?v=<lastKnownVersion> — if that matches stateVersion, nothing
-// has changed and it gets back a 1-field {"v":N} instead of the full state,
-// so most 20Hz polls cost almost nothing to send or parse.
-let stateVersion = 0;
+// ... keep your latestFrame and /upload, /image, /stream routes here ...
 
-let latestFrame = null;
-let objectHeight = 0.0;
+app.post('/update-command', (req, res) => {
+    console.log("Received update-command payload:", req.body); // Check your Render logs!
 
-// Sets botState[key] = value only if it actually differs; returns whether it changed.
-function setField(key, value) {
-    if (botState[key] !== value) {
-        botState[key] = value;
-        return true;
-    }
-    return false;
-}
+    if (req.body.flash === "toggle") botState.flash = !botState.flash;
+    if (req.body.laser === "toggle") botState.laser = !botState.laser;
+    if (typeof req.body.flash === "boolean") botState.flash = req.body.flash;
+    if (typeof req.body.laser === "boolean") botState.laser = req.body.laser;
 
-app.post('/upload', rawImageParser, (req, res) => {
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-        latestFrame = req.body;
-    }
-    if (req.headers['x-object-height']) {
-        objectHeight = parseFloat(req.headers['x-object-height']);
-    }
-    res.json(botState);
+    if (req.body.pan !== undefined) botState.pan = Number(req.body.pan);
+    if (req.body.tilt !== undefined) botState.tilt = Number(req.body.tilt);
+    if (req.body.speed !== undefined) botState.speed = Number(req.body.speed);
+    if (req.body.neck !== undefined) botState.neck = Number(req.body.neck);
+    if (req.body.shoulder !== undefined) botState.shoulder = Number(req.body.shoulder);
+    if (req.body.elbow !== undefined) botState.elbow = Number(req.body.elbow);
+    if (req.body.wrist !== undefined) botState.wrist = Number(req.body.wrist);
+    if (req.body.rotation !== undefined) botState.rotation = Number(req.body.rotation);
+
+    if (req.body.action !== undefined) botState.action = req.body.action;
+    if (req.body.command !== undefined) botState.command = req.body.command;
+
+    res.json({ status: "success", state: botState });
+});
 });
 
 app.get('/image', (req, res) => {
