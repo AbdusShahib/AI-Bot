@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 3000;
 // Bump this string every time you redeploy. /state and the startup log both
 // print it, so you can always confirm what's actually live on Render instead
 // of guessing.
-const BUILD_VERSION = "armbot-server-2026-09-11-panel-d";
+const BUILD_VERSION = "armbot-server-2026-09-11-panel-e";
 
 // JSON body parsing — used by /update-command and any other JSON routes.
 // NOTE: this does NOT parse the /upload route, because the ESP32 posts
@@ -151,20 +151,25 @@ app.post('/update-command', (req, res) => {
     res.json({ status: "success", state: botState });
 });
 
-// 4. Control Panel — diagram-style layout matching the reference arm image:
-// an arm illustration card on the left, joint sliders on the right, with
-// Neck/Speed broken out into their own footer box below (same structure as
-// the reference). Colors/buttons follow the same dark theme as the rest of
-// this app rather than the reference image's own palette.
+// 4. Control Panel — a compact horizontal drive bar (Forward/Left/Right/
+// Reverse, press-and-hold) above a card of joint sliders, with Neck/Speed
+// broken out into their own footer box below. Colors/buttons follow the
+// same dark theme as the rest of this app.
+//
+// NOTE ON DRIVE BAR / L298N: the buttons send distinct "forward"/"left"/
+// "right"/"reverse" actions, but as of this build the ESP32 only has a
+// single motor channel wired (MOTOR_FWD_PIN/MOTOR_REV_PIN) — there is no
+// second channel for genuine differential steering yet, so Left/Right
+// currently behave like Forward/Reverse on the hardware. Wiring real
+// left/right turning needs a second motor channel; see chat for the
+// suggested approach (moving both channels onto the ATmega8A slave, which
+// has 5 free GPIO — A0-A3 + D11 — versus only 1-2 marginal free pins left
+// on the ESP32 itself).
 //
 // NOTE ON FIELD MAPPING: the row labeled "Grip" below is bound to the real
 // `tilt` field, not a separate gripper — there is no gripper servo wired up
 // yet, and this was already confirmed to be tilt earlier. There is no Pan
-// row here (the reference image doesn't have one); pan stays controllable
-// only from the /controller joystick.
-//
-// Drop your arm photo at <project root>/public/robot-arm.png to have it
-// appear in the arm card — a placeholder shows if it's missing.
+// row here; pan stays controllable only from the /controller joystick.
 app.get('/panel', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -183,26 +188,26 @@ app.get('/panel', (req, res) => {
                     font-size: 11px; color: #777; margin: 0 0 16px 0; font-style: italic;
                 }
 
-                .arm-slider-grid {
-                    display: flex; gap: 18px;
-                    background: #1e1f20; border: 1px solid #333; border-radius: 10px; padding: 16px;
+                .drive-bar {
+                    background: #1e1f20; border: 1px solid #333; border-radius: 10px;
+                    padding: 12px; display: flex; gap: 8px;
                 }
-                .arm-card {
-                    width: 180px; flex-shrink: 0; background: #131314;
-                    border: 1px solid #333; border-radius: 8px;
-                    display: flex; align-items: center; justify-content: center;
-                    overflow: hidden; min-height: 340px;
+                .drive-btn {
+                    flex: 1; padding: 14px 6px; border: 1px solid #333; border-radius: 8px;
+                    background: #131314; color: #8ab4f8; font-weight: bold; font-size: 13px;
+                    display: flex; flex-direction: column; align-items: center; gap: 2px;
+                    cursor: pointer; user-select: none; touch-action: none;
                 }
-                .arm-card img { width: 100%; height: auto; display: block; }
-                .arm-fallback {
-                    color: #666; font-size: 11px; text-align: center; padding: 20px;
-                    line-height: 1.6;
-                }
-                .arm-fallback code {
-                    display: block; margin-top: 6px; color: #8ab4f8; font-size: 11px;
+                .drive-btn .arrow { font-size: 18px; line-height: 1; }
+                .drive-btn:active, .drive-btn.pressed {
+                    background: #0b57d0; color: #fff; border-color: #0b57d0;
                 }
 
-                .joint-rows { flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; }
+                .joint-card {
+                    margin-top: 14px; background: #1e1f20; border: 1px solid #333; border-radius: 10px;
+                    padding: 16px;
+                }
+                .joint-rows { display: flex; flex-direction: column; gap: 16px; }
                 .joint-row { display: flex; flex-direction: column; gap: 5px; }
                 .joint-label {
                     font-size: 12px; font-weight: bold; text-transform: uppercase; color: #8ab4f8;
@@ -261,17 +266,16 @@ app.get('/panel', (req, res) => {
         <body>
             <div class="page">
                 <h3>Armbot Control Panel</h3>
-                <p class="note">"Grip" below drives the tilt joint — no dedicated gripper servo is wired up yet. Pan isn't on this page; use /controller for that.</p>
+                <p class="note">"Grip" below drives the tilt joint — no dedicated gripper servo is wired up yet. Pan isn't on this page; use /controller for that. Left/Right send distinct commands but the L298N is currently only wired for straight forward/reverse — see note below the panel.</p>
 
-                <div class="arm-slider-grid">
-                    <div class="arm-card">
-                        <img id="arm-img" src="/public/robot-arm.png" alt="Robot arm"
-                             onerror="this.style.display='none'; document.getElementById('arm-fallback').style.display='block';">
-                        <div id="arm-fallback" class="arm-fallback" style="display:none;">
-                            Add your arm image at<code>public/robot-arm.png</code>
-                        </div>
-                    </div>
+                <div class="drive-bar">
+                    <div class="drive-btn" data-action="forward"><span class="arrow">&#8593;</span>FWD</div>
+                    <div class="drive-btn" data-action="left"><span class="arrow">&#8592;</span>LEFT</div>
+                    <div class="drive-btn" data-action="right"><span class="arrow">&#8594;</span>RIGHT</div>
+                    <div class="drive-btn" data-action="reverse"><span class="arrow">&#8595;</span>REV</div>
+                </div>
 
+                <div class="joint-card">
                     <div class="joint-rows">
                         <div class="joint-row">
                             <div class="joint-label"><span class="connector"></span>Grip<span class="sub">(tilt)</span></div>
@@ -336,6 +340,31 @@ app.get('/panel', (req, res) => {
                 const runBtn = document.getElementById('run-btn');
 
                 let steps = [];
+
+                // Drive bar — press and hold to move, release/leave to stop.
+                // Sends only {action: "..."} , nothing else, to keep the
+                // payload minimal. Left/Right currently produce the same
+                // hardware result as Forward/Reverse until the motor driver
+                // gets a second channel (see server-side note near this route).
+                document.querySelectorAll('.drive-btn').forEach(btn => {
+                    const action = btn.dataset.action;
+                    const start = (e) => {
+                        e.preventDefault();
+                        btn.classList.add('pressed');
+                        sendPayload({ action })
+                            .catch(err => setStatus('Drive error: ' + err.message));
+                    };
+                    const stop = () => {
+                        if (!btn.classList.contains('pressed')) return;
+                        btn.classList.remove('pressed');
+                        sendPayload({ action: 'stop' })
+                            .catch(err => setStatus('Drive error: ' + err.message));
+                    };
+                    btn.addEventListener('pointerdown', start);
+                    btn.addEventListener('pointerup', stop);
+                    btn.addEventListener('pointerleave', stop);
+                    btn.addEventListener('pointercancel', stop);
+                });
 
                 function updateFill(slider) {
                     const min = +slider.min, max = +slider.max, val = +slider.value;
