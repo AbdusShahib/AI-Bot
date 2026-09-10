@@ -21,7 +21,7 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 // Raw binary parser used ONLY on the JPEG upload endpoint.
 const rawImageParser = express.raw({ type: 'image/jpeg', limit: '10mb' });
 
-// Global Bot State containing all servos, motors, toggles, and sequence commands
+// Global Bot State containing all servos, motors, toggles, and sequence  commands
 let botState = {
     pan: 90,
     tilt: 90,
