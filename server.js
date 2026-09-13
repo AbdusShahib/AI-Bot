@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 3000;
 // Bump this string every time you redeploy. /state and the startup log both
 // print it, so you can always confirm what's actually live on Render instead
 // of guessing.
-const BUILD_VERSION = "armbot-server-2026-09-11-panel-joystick-f";
+const BUILD_VERSION = "armbot-server-2026-09-11-drive-joystick-a";
 
 // JSON body parsing — used by /update-command and any other JSON routes.
 // NOTE: this does NOT parse the /upload route, because the ESP32 posts
@@ -151,21 +151,20 @@ app.post('/update-command', (req, res) => {
     res.json({ status: "success", state: botState });
 });
 
-// 4. Control Panel — a combined radial drive joystick (Forward/Left/Right/
-// Reverse in one drag control, styled as a semi-transparent circle with
-// directional chevrons) above a card of joint sliders, with Neck/Speed
+// 4. Control Panel — a compact horizontal drive bar (Forward/Left/Right/
+// Reverse, press-and-hold) above a card of joint sliders, with Neck/Speed
 // broken out into their own footer box below. Colors/buttons follow the
 // same dark theme as the rest of this app.
 //
-// NOTE ON DRIVE JOYSTICK / L298N: dragging the knob sends distinct
-// "forward"/"left"/"right"/"reverse" actions based on which direction
-// dominates, but as of this build the ESP32 only has a single motor
-// channel wired (MOTOR_FWD_PIN/MOTOR_REV_PIN) — there is no second channel
-// for genuine differential steering yet, so Left/Right currently behave
-// like Forward/Reverse on the hardware. Wiring real left/right turning
-// needs a second motor channel; see chat for the suggested approach (moving
-// both channels onto the ATmega8A slave, which has 5 free GPIO — A0-A3 +
-// D11 — versus only 1-2 marginal free pins left on the ESP32 itself).
+// NOTE ON DRIVE BAR / L298N: the buttons send distinct "forward"/"left"/
+// "right"/"reverse" actions, but as of this build the ESP32 only has a
+// single motor channel wired (MOTOR_FWD_PIN/MOTOR_REV_PIN) — there is no
+// second channel for genuine differential steering yet, so Left/Right
+// currently behave like Forward/Reverse on the hardware. Wiring real
+// left/right turning needs a second motor channel; see chat for the
+// suggested approach (moving both channels onto the ATmega8A slave, which
+// has 5 free GPIO — A0-A3 + D11 — versus only 1-2 marginal free pins left
+// on the ESP32 itself).
 //
 // NOTE ON FIELD MAPPING: the row labeled "Grip" below is bound to the real
 // `tilt` field, not a separate gripper — there is no gripper servo wired up
@@ -189,34 +188,19 @@ app.get('/panel', (req, res) => {
                     font-size: 11px; color: #777; margin: 0 0 16px 0; font-style: italic;
                 }
 
-                .drive-joystick {
-                    position: relative;
-                    width: 150px; height: 150px; margin: 4px auto;
-                    border-radius: 50%;
-                    background: rgba(90, 90, 90, 0.45);
-                    border: 2px solid rgba(255, 255, 255, 0.35);
-                    touch-action: none; user-select: none;
+                .drive-bar {
+                    background: #1e1f20; border: 1px solid #333; border-radius: 10px;
+                    padding: 12px; display: flex; gap: 8px;
                 }
-                .drive-joystick .chevron {
-                    position: absolute; color: rgba(255, 255, 255, 0.6);
-                    font-size: 16px; line-height: 1; pointer-events: none;
+                .drive-btn {
+                    flex: 1; padding: 14px 6px; border: 1px solid #333; border-radius: 8px;
+                    background: #131314; color: #8ab4f8; font-weight: bold; font-size: 13px;
+                    display: flex; flex-direction: column; align-items: center; gap: 2px;
+                    cursor: pointer; user-select: none; touch-action: none;
                 }
-                .drive-joystick .chevron-n { top: 8px; left: 50%; transform: translateX(-50%); }
-                .drive-joystick .chevron-s { bottom: 8px; left: 50%; transform: translateX(-50%); }
-                .drive-joystick .chevron-w { left: 8px; top: 50%; transform: translateY(-50%); }
-                .drive-joystick .chevron-e { right: 8px; top: 50%; transform: translateY(-50%); }
-                .drive-joystick.active .chevron { color: rgba(138, 180, 248, 0.9); }
-                .drive-knob {
-                    position: absolute; top: 50%; left: 50%;
-                    width: 62px; height: 62px; margin: -31px 0 0 -31px;
-                    border-radius: 50%;
-                    background: rgba(50, 50, 50, 0.65);
-                    border: 2px solid rgba(255, 255, 255, 0.5);
-                    pointer-events: none;
-                }
-                .drive-joystick.active .drive-knob {
-                    background: rgba(11, 87, 208, 0.55);
-                    border-color: #8ab4f8;
+                .drive-btn .arrow { font-size: 18px; line-height: 1; }
+                .drive-btn:active, .drive-btn.pressed {
+                    background: #0b57d0; color: #fff; border-color: #0b57d0;
                 }
 
                 .joint-card {
@@ -282,14 +266,13 @@ app.get('/panel', (req, res) => {
         <body>
             <div class="page">
                 <h3>Armbot Control Panel</h3>
-                <p class="note">"Grip" below drives the tilt joint — no dedicated gripper servo is wired up yet. Pan isn't on this page; use /controller for that. The drive joystick sends distinct Left/Right/Forward/Reverse actions but the L298N is currently only wired for straight forward/reverse — see note below the panel.</p>
+                <p class="note">"Grip" below drives the tilt joint — no dedicated gripper servo is wired up yet. Pan isn't on this page; use /controller for that. Left/Right send distinct commands but the L298N is currently only wired for straight forward/reverse — see note below the panel.</p>
 
-                <div class="drive-joystick" id="drive-joy">
-                    <div class="chevron chevron-n">&#9650;</div>
-                    <div class="chevron chevron-e">&#9654;</div>
-                    <div class="chevron chevron-s">&#9660;</div>
-                    <div class="chevron chevron-w">&#9664;</div>
-                    <div class="drive-knob" id="drive-knob"></div>
+                <div class="drive-bar">
+                    <div class="drive-btn" data-action="forward"><span class="arrow">&#8593;</span>FWD</div>
+                    <div class="drive-btn" data-action="left"><span class="arrow">&#8592;</span>LEFT</div>
+                    <div class="drive-btn" data-action="right"><span class="arrow">&#8594;</span>RIGHT</div>
+                    <div class="drive-btn" data-action="reverse"><span class="arrow">&#8595;</span>REV</div>
                 </div>
 
                 <div class="joint-card">
@@ -358,81 +341,30 @@ app.get('/panel', (req, res) => {
 
                 let steps = [];
 
-                // Drive joystick — drag to move, release/re-center to stop.
-                // Maps position to the SAME four discrete actions the old
-                // buttons sent (forward/left/right/reverse/stop) rather than
-                // continuous values, since the hardware still only has one
-                // motor channel (see server-side note near this route) --
-                // this is a UI change, not a new drive capability.
-                (function () {
-                    const base = document.getElementById('drive-joy');
-                    const knob = document.getElementById('drive-knob');
-                    const maxRadius = 44;      // how far the knob can travel from center, px
-                    const deadzone = 0.25;     // fraction of maxRadius treated as "centered"
-                    let centerX = 0, centerY = 0;
-                    let currentAction = 'stop';
-                    let active = false;
-
-                    function sendAction(action) {
-                        if (action === currentAction) return;
-                        currentAction = action;
+                // Drive bar — press and hold to move, release/leave to stop.
+                // Sends only {action: "..."} , nothing else, to keep the
+                // payload minimal. Left/Right currently produce the same
+                // hardware result as Forward/Reverse until the motor driver
+                // gets a second channel (see server-side note near this route).
+                document.querySelectorAll('.drive-btn').forEach(btn => {
+                    const action = btn.dataset.action;
+                    const start = (e) => {
+                        e.preventDefault();
+                        btn.classList.add('pressed');
                         sendPayload({ action })
                             .catch(err => setStatus('Drive error: ' + err.message));
-                    }
-
-                    function updateCenter() {
-                        const rect = base.getBoundingClientRect();
-                        centerX = rect.left + rect.width / 2;
-                        centerY = rect.top + rect.height / 2;
-                    }
-
-                    function move(e) {
-                        if (!active) return;
-                        e.preventDefault();
-                        const point = e.touches ? e.touches[0] : e;
-                        let dx = point.clientX - centerX;
-                        let dy = point.clientY - centerY;
-                        const dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist > maxRadius) {
-                            dx = (dx / dist) * maxRadius;
-                            dy = (dy / dist) * maxRadius;
-                        }
-                        knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-
-                        const frac = Math.min(dist / maxRadius, 1);
-                        if (frac < deadzone) {
-                            sendAction('stop');
-                        } else if (Math.abs(dx) > Math.abs(dy)) {
-                            sendAction(dx > 0 ? 'right' : 'left');
-                        } else {
-                            sendAction(dy > 0 ? 'reverse' : 'forward');
-                        }
-                    }
-
-                    function start(e) {
-                        e.preventDefault();
-                        active = true;
-                        base.classList.add('active');
-                        updateCenter();
-                        move(e);
-                    }
-
-                    function end() {
-                        if (!active) return;
-                        active = false;
-                        base.classList.remove('active');
-                        knob.style.transform = 'translate(0px,0px)';
-                        sendAction('stop');
-                    }
-
-                    base.addEventListener('pointerdown', start);
-                    base.addEventListener('touchstart', start, { passive: false });
-                    window.addEventListener('pointermove', move);
-                    window.addEventListener('touchmove', move, { passive: false });
-                    window.addEventListener('pointerup', end);
-                    window.addEventListener('touchend', end);
-                    window.addEventListener('pointercancel', end);
-                })();
+                    };
+                    const stop = () => {
+                        if (!btn.classList.contains('pressed')) return;
+                        btn.classList.remove('pressed');
+                        sendPayload({ action: 'stop' })
+                            .catch(err => setStatus('Drive error: ' + err.message));
+                    };
+                    btn.addEventListener('pointerdown', start);
+                    btn.addEventListener('pointerup', stop);
+                    btn.addEventListener('pointerleave', stop);
+                    btn.addEventListener('pointercancel', stop);
+                });
 
                 function updateFill(slider) {
                     const min = +slider.min, max = +slider.max, val = +slider.value;
@@ -568,13 +500,22 @@ app.get('/controller', (req, res) => {
                 .joystick-container {
                     position: absolute; bottom: 25px;
                     width: 140px; height: 140px; border-radius: 50%;
-                    background: rgba(42, 42, 44, 0.3); 
+                    background: radial-gradient(circle at 35% 30%, rgba(70,72,76,0.35), rgba(20,20,22,0.35));
                     border: 3px solid rgba(255, 255, 255, 0.3);
+                    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
                     z-index: 10; display: flex; justify-content: center; align-items: center;
                     transition: opacity 0.2s ease, background 0.2s ease;
                 }
                 #joy-left { left: 40px; }
                 #joy-right { right: 40px; }
+                .dir-hint {
+                    position: absolute; color: rgba(255,255,255,0.35);
+                    font-size: 14px; pointer-events: none; z-index: 5;
+                }
+                .dir-up    { top: 8px; left: 50%; transform: translateX(-50%); }
+                .dir-down  { bottom: 8px; left: 50%; transform: translateX(-50%); }
+                .dir-left  { left: 8px; top: 50%; transform: translateY(-50%); }
+                .dir-right { right: 8px; top: 50%; transform: translateY(-50%); }
                 .stick {
                     width: 60px; height: 60px; border-radius: 50%;
                     background: rgba(138, 180, 248, 0.4);
@@ -583,7 +524,7 @@ app.get('/controller', (req, res) => {
                     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
                 }
                 .joystick-container.active {
-                    background: rgba(42, 42, 44, 0.75);
+                    background: radial-gradient(circle at 35% 30%, rgba(70,72,76,0.8), rgba(20,20,22,0.8));
                     border-color: rgba(255, 255, 255, 0.9);
                 }
                 .joystick-container.active .stick {
@@ -604,7 +545,13 @@ app.get('/controller', (req, res) => {
                 <img id="feed" alt="Live Stream" />
             </div>
             <div id="joy-left" class="joystick-container"><div id="stick-left" class="stick"></div></div>
-            <div id="joy-right" class="joystick-container"><div id="stick-right" class="stick"></div></div>
+            <div id="joy-right" class="joystick-container">
+                <span class="dir-hint dir-up">&#8593;</span>
+                <span class="dir-hint dir-down">&#8595;</span>
+                <span class="dir-hint dir-left">&#8592;</span>
+                <span class="dir-hint dir-right">&#8594;</span>
+                <div id="stick-right" class="stick"></div>
+            </div>
             <script>
                 const img = document.getElementById('feed');
                 const errBox = document.getElementById('errorBox');
@@ -677,9 +624,18 @@ app.get('/controller', (req, res) => {
                             botState.pan = Math.round(90 + (nx * 90));
                             botState.tilt = Math.round(90 + (ny * -90));
                         } else {
-                            if (ny < -0.35) botState.action = "forward";
-                            else if (ny > 0.35) botState.action = "reverse";
-                            else botState.action = "stop";
+                            // Combined drive stick: whichever axis is pushed
+                            // further decides forward/reverse vs left/right.
+                            // A deadzone in the middle keeps small jitters
+                            // from constantly toggling the action.
+                            const deadzone = 0.25;
+                            if (Math.abs(nx) < deadzone && Math.abs(ny) < deadzone) {
+                                botState.action = "stop";
+                            } else if (Math.abs(ny) >= Math.abs(nx)) {
+                                botState.action = ny < 0 ? "forward" : "reverse";
+                            } else {
+                                botState.action = nx < 0 ? "left" : "right";
+                            }
                         }
                         sendCommand();
                     }
