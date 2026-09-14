@@ -96,7 +96,7 @@ app.get('/stream', (req, res) => {
                 }
                 img {
                     width: 100%; height: 100%; object-fit: cover;
-                    transform: rotate(180deg); display: none;
+                    transform: rotate(); display: none;
                 }
                 #errorBox {
                     color: #ff4444; border: 2px solid #ff4444; padding: 20px;
@@ -559,7 +559,7 @@ app.get('/controller', (req, res) => {
                 }
                 img { 
                     width: 100%; height: 100%; object-fit: cover; 
-                    transform: rotate(180deg); display: none; 
+                    transform: rotate(0deg); display: none; 
                 }
                 #errorBox { 
                     color: #ff4444; border: 2px solid #ff4444; padding: 20px; 
